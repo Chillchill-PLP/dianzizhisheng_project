@@ -1,0 +1,25 @@
+menu "Player speech recognition"
+    config PLAYER_MIC_CONNECTED
+        bool "Enable INMP441 microphone (enable only after wiring)"
+        default y
+        help
+            Uses ESP-SR WakeNet9 + Chinese MultiNet5 Q8.
+            Wake word: ni hao xiao zhi.
+    config PLAYER_MIC_BCLK_GPIO
+        int "INMP441 SCK GPIO"
+        range 0 48
+        default 5
+    config PLAYER_MIC_WS_GPIO
+        int "INMP441 WS GPIO"
+        range 0 48
+        default 4
+    config PLAYER_MIC_DATA_GPIO
+        int "INMP441 SD GPIO"
+        range 0 48
+        default 6
+    config PLAYER_MIC_RIGHT_CHANNEL
+        bool "Use right I2S slot (INMP441 L/R connected to 3V3)"
+        default n
+        help
+            Default is the left slot with INMP441 L/R tied to GND.
+endmenu

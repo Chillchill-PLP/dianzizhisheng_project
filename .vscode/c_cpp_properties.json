@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "name": "ESP-IDF",
+      "compilerPath": "",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+      "intelliSenseMode": "gcc-x64",
+      "defines": [
+        "ESP_PLATFORM"
+      ],
+      "includePath": [
+        "${workspaceFolder}/main",
+        "${workspaceFolder}/build/config",
+        "D:/esp/v5.5.5/esp-idf/components/**"
+      ],
+      "browse": {
+        "path": [
+          "${workspaceFolder}/main",
+          "${workspaceFolder}/build/config",
+          "D:/esp/v5.5.5/esp-idf/components"
+        ],
+        "limitSymbolsToIncludedHeaders": true
+      }
+    }
+  ],
+  "version": 4
+}

@@ -1,0 +1,56 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.extensionActivationMode": "always",
+  "cmake.cmakePath": "D:\\Espressif\\tools\\cmake\\3.30.2\\bin\\cmake.exe",
+  "cmake.generator": "Ninja",
+  "cmake.configureOnOpen": false,
+  "cmake.configureOnEdit": false,
+  "cmake.automaticReconfigure": false,
+  "cmake.autoSelectActiveFolder": false,
+  "cmake.options.advanced": {
+    "build": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "hidden"
+    },
+    "launch": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "hidden"
+    },
+    "debug": {
+      "statusBarVisibility": "inherit",
+      "inheritDefault": "hidden"
+    }
+  },
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ],
+  "idf.port": "COM8",
+  "idf.currentSetup": "D:\\esp\\v5.5.5\\esp-idf",
+  "idf.eimIdfJsonPath": "D:\\Espressif\\tools\\eim_idf.json",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3",
+    "IDF_PATH": "D:\\esp\\v5.5.5\\esp-idf",
+    "IDF_TOOLS_PATH": "D:\\Espressif",
+    "IDF_PYTHON_ENV_PATH": "D:\\Espressif\\tools\\python\\v5.5.5\\venv",
+    "ESP_ROM_ELF_DIR": "D:\\Espressif\\tools\\esp-rom-elfs\\20241011",
+    "OPENOCD_SCRIPTS": "D:\\Espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20260424\\openocd-esp32\\share\\openocd\\scripts",
+    "IDF_CCACHE_ENABLE": "1"
+  },
+  "terminal.integrated.env.windows": {
+    "IDF_PATH": "D:\\esp\\v5.5.5\\esp-idf",
+    "IDF_TOOLS_PATH": "D:\\Espressif",
+    "IDF_PYTHON_ENV_PATH": "D:\\Espressif\\tools\\python\\v5.5.5\\venv",
+    "ESP_ROM_ELF_DIR": "D:\\Espressif\\tools\\esp-rom-elfs\\20241011",
+    "OPENOCD_SCRIPTS": "D:\\Espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20260424\\openocd-esp32\\share\\openocd\\scripts",
+    "IDF_CCACHE_ENABLE": "1",
+    "PATH": "D:\\Espressif\\tools\\ccache\\4.12.1\\ccache-4.12.1-windows-x86_64;D:\\Espressif\\tools\\cmake\\3.30.2\\bin;D:\\Espressif\\tools\\ninja\\1.12.1;D:\\Espressif\\tools\\xtensa-esp-elf\\esp-14.2.0_20260121\\xtensa-esp-elf\\bin;D:\\Espressif\\tools\\python\\v5.5.5\\venv\\Scripts;${env:PATH}"
+  },
+  "clangd.path": "D:\\Espressif\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=C:/Users/Administrator/Desktop/dianzizhisheng_project/build"
+  ],
+  "idf.flashType": "UART",
+  "chat.agent.enabled": false
+}
