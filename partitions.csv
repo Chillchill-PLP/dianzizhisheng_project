@@ -1,3 +1,12 @@
+# Flash 分区布局，单位为字节；这些十六进制偏移/大小由构建工具解析。
+# nvs：0x9000~0xEFFF，24 KiB，供系统/组件保存非易失设置。
+# 当前播放器的音量只保存在 RAM，本应用没有把音量写入 nvs。
+# phy_init：0xF000~0xFFFF，4 KiB，预留给 PHY 初始化数据。
+# factory：0x10000 起，3 MiB，唯一应用分区；本工程没有 OTA 双槽升级。
+# model：0x310000 起，8 MiB，ESP-SR 生成的离线模型镜像，名字必须与
+# main.c 的 esp_srmodel_init("model") 一致；虽标记 spiffs，不由播放器当普通文件系统挂载。
+# 剩余 Flash 未分配；音乐文件保存在外接 SD，不能把 SD 曲目当成 Flash 分区内容。
+# 首次烧录需包含模型；仅更新应用代码时可按生成的 app 参数烧录 factory。
 # ESP32-S3 N16R8, 16 MB Flash. No OTA in the current player.
 # Name, Type, SubType, Offset, Size, Flags
 nvs,data,nvs,0x9000,0x6000,

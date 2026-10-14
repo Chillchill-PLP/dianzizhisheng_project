@@ -1,3 +1,10 @@
+# menuconfig 中的 Player speech recognition 菜单。
+# 配置保存到 sdkconfig，再生成 CONFIG_PLAYER_* 宏供 main.c 使用。
+# PLAYER_MIC_CONNECTED 可禁用整套麦克风/语音初始化，音乐和键盘功能仍保留。
+# BCLK/WS 为 ESP32 输出、DATA 为麦克风输入；修改后还需检查其他模块的引脚冲突。
+# GPIO 范围 0~48 是菜单输入范围，不代表每个 GPIO 都能用于任意功能。
+# RIGHT_CHANNEL 与 INMP441 的 L/R 硬接线对应：接 GND 用左 slot，接 3V3 用右 slot。
+# 当前采集保留左右两个 32 位 slot，选择有效 slot 的操作在 speech_feed_task 完成。
 menu "Player speech recognition"
     config PLAYER_MIC_CONNECTED
         bool "Enable INMP441 microphone (enable only after wiring)"

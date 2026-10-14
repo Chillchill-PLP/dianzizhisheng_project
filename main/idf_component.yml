@@ -1,3 +1,8 @@
+# ESP-IDF Component Manager 的应用依赖声明。
+# idf 约束为 5.5.x 系列及其他 <6.0 的符合版本，当前本机使用 5.5.5。
+# esp-sr 固定为 2.5.5，确保 AFE/MultiNet 接口和本工程的初始化代码一致。
+# managed_components 由管理器下载；dependencies.lock 保存解析结果，不手改第三方源码。
+# 注释不改变版本锁定；升级库时应单独验证模型、任务同步和接口差异。
 dependencies:
   idf: ">=5.5.0,<6.0.0"
   espressif/esp-sr: "==2.5.5"

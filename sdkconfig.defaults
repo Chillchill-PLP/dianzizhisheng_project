@@ -1,26 +1,38 @@
+# 工程默认配置：用于首次生成 sdkconfig 或补充未设选项。
+# 已存在 sdkconfig 时，它才是实际编译配置；修改此文件不会强制覆盖已有选项。
+# 下面保留现有值，只说明与硬件、离线模型和文件名支持的关系。
 # ESP32-S3-N16R8: 16 MB flash and 8 MB Octal PSRAM.
+# N16R8 板卡的 Flash/八线 PSRAM：PSRAM 用于模型和大屏帧缓冲。
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
+# 自定义分区分别容纳 3 MiB 应用和 8 MiB 离线模型。
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# 唤醒词“你好小智”及中文 MultiNet5 Q8；不包含英文命令模型。
 CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
 CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y
 CONFIG_SR_MN_EN_NONE=y
+# AFE 的 WebRTC 降噪及语音活动检测支持；应用仍连续喂完整帧给 MultiNet。
 CONFIG_SR_NSN_WEBRTC=y
 CONFIG_SR_VADN_WEBRTC=y
+# 将所选模型生成到独立 Flash 模型镜像，运行时由 ESP-SR 从 model 分区加载。
 CONFIG_MODEL_IN_FLASH=y
+# 应用麦克风选项与 GPIO；左/右 slot 选择的默认值另见 Kconfig。
 CONFIG_PLAYER_MIC_CONNECTED=y
 CONFIG_PLAYER_MIC_BCLK_GPIO=5
 CONFIG_PLAYER_MIC_WS_GPIO=4
 CONFIG_PLAYER_MIC_DATA_GPIO=6
 
-# microSD filenames are exposed to application code as UTF-8 and may be up to 255 bytes.
+# FAT 长文件名容量为 255 个 UTF-16 代码单元；API 使用 UTF-8，不能把它理解为 255 字节。
+# 应用路径缓冲 SD_PATH_BUFFER_BYTES 按 UTF-8 字节计数，过长路径会明确跳过。
+# 长文件名缓冲由堆分配；UTF-8 文件名用于 fopen，屏幕显示名另转 ASCII。
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
 CONFIG_FATFS_API_ENCODING_UTF_8=y
 
-# GPIO20 is the keypad R4; keep console on UART only.
+# 主控制台保留现有 UART 配置；矩阵已不再使用 GPIO20。
+# 关闭第二控制台，避免额外 USB 控制台占用；当前 GPIO19/20 留给 USB，矩阵 R4=18。
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
