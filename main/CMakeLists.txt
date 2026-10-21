@@ -23,4 +23,9 @@ idf_component_register(
         fatfs
         esp_driver_sdspi
         sdmmc
+        esp_wifi
+        esp_event
+        esp_netif
+        esp_http_server
+        nvs_flash
 )

@@ -5,28 +5,38 @@
  * ST7789 240x240: SCL=GPIO42, SDA=GPIO41, RES=GPIO39,
  *                 DC=GPIO40, BLK=GPIO38, VCC=3V3, GND=GND
  * 开屏动画：依据桌面透明版动画，校徽居中放大 2 倍，描边后渐显，播放一次约 4.3 秒。
- *           限制到 10 fps，按时间轴跳过过期帧；结束后显示加载页和歌曲信息。
- * 显示优化：SPI 20 MHz、变化区域刷新、重复状态跳过，局部画面更新上限约 50 Hz。
+ *           原 SVG 按约 30 fps 采样，按时间轴跳过过期帧；结束后进入四宫格开始界面。
+ * 显示优化：SPI 40 MHz、双 DMA 缓冲、变化区域刷新，局部画面更新上限约 59 Hz。
+ * 界面：参考 Astra 的圆角反白选择器和缓动体验，中文抗锯齿字体、真实播放进度。
+ * UI 绘制在 player_ui.inc，字形资源在 player_ui_fonts.inc；保留当前校徽开屏动画。
  * WS2812 RGB：DIN=GPIO48（兼容多数 ESP32-S3 开发板的板载 RGB 灯）。
  *             音乐实际播放时彩色呼吸；电子琴单键按住亮起、松开熄灭。
  *             C=红、D=橙、E=黄、F=绿、G=青、A=蓝、B=紫（同名音不同八度同色）。
  *             暂停、语音监听、无歌曲、多键冲突及电子琴设置中熄灭。
+ * HC-SR04+ 宽电压版：VCC=3V3，Trig=GPIO3，Echo=GPIO47，GND 共地，无需分压。
+ *          此直接接线只适用于支持 3.3V 供电的版本，勿把 VCC 改接 5V 后直连 Echo。
+ *          音乐模式下手掌距探头约 2~15 cm 感应一次，切换播放/暂停，保留歌曲位置。
+ *          手持续停留只触发一次，移到 22 cm 外后可再次感应；移手不改变播放状态。
+ *          手势与语音共用播放/暂停状态；电子琴模式忽略手势。
  * microSD(SPI): CS=GPIO10, MOSI=GPIO11, SCK=GPIO12, MISO=GPIO13,
  *               +5 接 5V 或 +3.3 接 3V3（二选一），GND=GND
- * SD 卡 WAV：启动时自动发现并播放；支持 PCM 8/16/24/32 位及 32 位 float，
+ * SD 卡 WAV：进入音乐模式后按需发现并播放；支持 PCM 8/16/24/32 位及 32 位 float，
  *             单/双声道、8~96 kHz。无内置音乐；未找到 WAV 时显示 NO WAV FILES 并静音。
- * BOOT(GPIO0): 短按并松开切换音乐 / 电子琴；长按 1 秒进入设置，短按退出设置。
+ * BOOT(GPIO0): 开屏后进入四宫格开始页；短按依次选择音乐、电子琴、文件传输、设置。
+ *             选中项显示边框；长按 1 秒进入，功能内长按 1 秒返回开始页。
+ *             音乐页短按并松开切到下一首，末首循环到第一首；长按返回不额外切歌。
+ * Wi-Fi：文件传输模式提供热点/可选路由器连接，浏览器上传/下载 SD 根目录 WAV。
  * 4x4 矩阵键盘：C1=9、C2=8、C3=2、C4=1；R1=14、R2=17、R3=21、R4=18。
  * GPIO35/36/37 由八线 PSRAM 占用，不能接键盘；BOOT 独占 GPIO0。
  * 修改接线时调整 KEYPAD_*_GPIO；检测到引脚冲突时禁用矩阵扫描。
  * C2 必须从 GPIO0 移到上述独立引脚；所有列为上拉输入，各行开漏逐行拉低。
- * BOOT 连续操作至少间隔 300 ms；长按进入设置不会同时切换模式，开机按住不触发。
+ * BOOT 连续操作至少间隔 300 ms；长按动作松开时不再触发短按，开机按住不触发。
  * 设置界面：R1C1 选择音乐音量，R1C2 选择电子琴音量，R1C3 减小，R1C4 增大。
  * 音量范围 0~100%，每次调整 1%；长按加减键可连续调整，多键同时按下不调整。
  * 音乐和电子琴的整体输出增益由 AUDIO_OUTPUT_GAIN 决定，超出 16 位范围时限幅。
  * 电子琴额外衰减由 PIANO_VOLUME_DIVISOR 决定。
  * 音量立即生效并在本次上电期间分别记忆；重启恢复下方初始值。
- * 设置中音乐继续播放，电子琴暂时静音；退出并松开全部琴键后恢复弹奏。
+ * 设置为开始页中的独立功能，音乐及电子琴均静音，长按 BOOT 返回。
  * 音符按 R1~R4、每行 C1~C4 排列（单音，按住发声、松开停止）：
  *   R1: C4 D4 E4 F4    R2: G4 A4 B4 C5
  *   R3: D5 E5 F5 G5    R4: A5 B5 C6 D6
@@ -34,8 +44,9 @@
  * 切回音乐时从当前歌曲开头播放；切歌仍可使用“下一首 / 上一首”。
  * 切回音乐先检查 SD 卡状态；读卡超时后自动重挂载，降至 4/2 MHz 重试。
  * SD 恢复时显示“加载中”并保持静音，不重复显示校标；失败后间隔 5 秒再试。
- * 音乐模式支持语音控制；“暂停 / 继续”状态也控制电子琴发声。
- * GPIO19/20 保留 USB；GPIO45/46 保留启动配置；GPIO47 留空，GPIO48 驱动 RGB。
+ * 音乐模式支持语音控制；“暂停 / 播放”状态也控制电子琴发声。
+ * GPIO19/20 保留 USB；GPIO45/46 保留启动配置；GPIO47 接超声波 Echo，GPIO48 驱动 RGB。
+ * GPIO3 兼有 JTAG 启动配置功能，只接 HC-SR04 的 Trig 输入，勿外加强上拉。
  * 功放 VIN 接稳压 5V 的独立支路；各模块共地，SPK- 仅接扬声器负端。
  * 模式切换保持当前 I2S 采样率，避免切换时重配 DMA；电子琴音高按当前采样率计算。
  * MAX98357 TX 在播放器任务所属 CPU1 上初始化，使写入任务与 DMA 中断位于同一核心。
@@ -44,10 +55,10 @@
  * 初始音量：音乐修改 PLAYER_VOLUME_PERCENT，电子琴修改 PIANO_VOLUME_PERCENT。
  * 两者范围均为 0~100；可在设置界面修改，无需重新编译。
  * 语音音量命令调整当前模式；设置打开时调整界面选中的音量。
- * ESP-SR: WakeNet9（你好小智）+ 中文 MultiNet5 Q8，语音控制切歌/播放/音量。
- * 语音提示词：先说“你好小智”唤醒，再在 6 秒内说以下任一句。
+ * ESP-SR: WakeNet9（你好小鑫）+ 中文 MultiNet5 Q8，语音控制切歌/播放/音量。
+ * 语音提示词：先说“你好小鑫”唤醒，再在 6 秒内说以下任一句。
  *   切歌：下一首、上一首。
- *   播放控制：暂停、继续。
+ *   播放控制：暂停、播放（也可说“播放音乐”或“恢复播放”）。
  *   选曲：播放第一首、播放第二首（对应启动时扫描到的 SD 卡 WAV 文件）。
  *   音量：增大音量、减小音量、静音、取消静音。
  *   每条命令前重新唤醒；电子琴模式暂停语音识别，使用按键设置音量。
@@ -59,12 +70,12 @@
 /*
  * 阅读导引与运行流程
  * ==================
- * 本文件包含应用逻辑、字体/校标资源及各外设驱动的调用，不依赖网络服务。
+ * 本文件包含应用逻辑、字体/校标资源及各外设驱动；Wi-Fi HTTP 传输在 wifi_transfer.inc。
  * 建议阅读顺序：app_main -> player_task -> play_sd_wav / play_piano，
  * 再分别查看 button_poll、speech_detect_task、display_task、rgb_effect_task。
  *
- * 启动顺序：建立消息队列 -> 配置按键 -> 初始化 TFT -> 单次开屏动画 -> 加载页
- *          -> SD 挂载并扫描 WAV -> 初始化离线语音 -> 启动显示/播放/RGB 任务。
+ * 启动顺序：消息队列 -> 配置按键 -> TFT -> 单次开屏动画 -> 四宫格开始页 -> 常驻任务。
+ * 进入音乐/传输后按需挂载 SD；首次进入音乐才初始化离线语音。
  * 动画只在启动时播放一次；异常时回退静态校标；SD 初始化及运行期恢复都使用“加载中”页面。
  *
  * 任务及状态所有权（启动初始化结束后的正常运行阶段）：
@@ -75,17 +86,20 @@
  *   sr_detect / CPU1 / 优先级 5：取 AFE 输出并运行 MultiNet，通过命令队列请求控制。
  *   tft_display / CPU1 / 优先级 2：合并状态快照，重绘后仅发送改变的 RGB565 区域。
  *   rgb_breath / CPU0 / 优先级 1：读取一个原子灯效状态，独占 RMT/WS2812 发送。
+ *   ultrasonic / CPU0 / 优先级 2：RMT RX 测量 Echo，每 80 ms 采样，发布遮挡原子状态。
  *   sd_scan / sd_recover / CPU0 / 优先级 3：临时任务，挂载/扫描或重挂载后自删除。
  * ESP-IDF 的 xTaskCreatePinnedToCore 栈大小参数以字节计，优先级数值越大越优先。
  *
  * 跨任务通信：
  *   s_player_commands：16 项 FIFO，语音任务提交枚举命令；播放器每批音频写完后处理。
  *   s_display_updates：1 项覆盖队列，只保留最新快照；按最多约 50 Hz 合并变化。
+ *   歌曲进度约每秒送一次快照；设置选择框/页面入场最多缓动 180 ms，结束后停止定时刷新。
  *   s_rgb_output：原子整数，-1 灭灯、-2 音乐呼吸、0~15 电子琴键号。
+ *   s_ultrasonic_blocked：测距任务发布滤波后的遮挡状态；播放器仅在新遮挡时切换暂停。
  *   s_sd_mount_attempt：原子整数，仅发布挂载次数；SD 完成结果由任务通知同步。
  *   s_speech.start_event：启动门、运行门和两项暂停确认，协调语音任务与模式切换。
  * 运行期 TFT 帧缓冲只由显示任务写；启动时显示任务尚未创建，初始化流程可直接绘制。
- * 启动扫描后歌曲目录不再修改，因此显示任务可安全读取已保存的歌曲名称。
+ * 歌曲目录只由扫描任务/播放器修改，显示快照复制路径与数量，不跨任务读取目录。
  * 这些规则是共享全局变量不逐个加锁的前提；新增任务时不要直接修改播放器状态。
  *
  * 音频通路：
@@ -117,10 +131,16 @@
 #include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/rmt_encoder.h"
+#include "driver/rmt_rx.h"
 #include "driver/rmt_tx.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
+#include "esp_event.h"
+#include "esp_http_server.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
 #include "esp_vfs_fat.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -147,7 +167,7 @@
 /* ---------------------------- 用户可调参数 ---------------------------- */
 
 #define NJUPT_LOGO_HOLD_MS          2000U /* 动画出错时备用静态校标的停留时间 */
-#define NJUPT_SPLASH_MIN_FRAME_MS   100U /* 最多 10 fps；20 MHz SPI 整屏理论约 46 ms，留出处理余量 */
+#define NJUPT_SPLASH_MIN_FRAME_MS   33U /* 原 SVG 按约 30 fps 采样，保持 4.3 秒时长；40 MHz SPI 整屏理论约 23 ms */
 
 #define PLAYER_VOLUME_PERCENT       1U /* 音乐上电初始音量 0~100%；设置修改只保存在 RAM */
 #define PIANO_VOLUME_PERCENT        1U /* 电子琴上电初始音量 0~100%，与音乐音量独立 */
@@ -166,7 +186,22 @@
 #define MIC_READ_TIMEOUT_MS         100U /* 单次 I2S RX 读取最长等待毫秒数，便于暂停时尽快响应 */
 #define VOICE_COMMAND_TIMEOUT_MS    6000U /* 唤醒后等待一条语音命令的最长毫秒数 */
 #define SPEECH_PAUSE_TIMEOUT_MS     500U /* 模式切换时等待两个语音任务暂停确认的上限，单位 ms */
-#define VOICE_MIN_PROBABILITY       0.65f /* MultiNet 检测阈值，并对返回的最佳命令概率再次校验 */
+#define VOICE_MIN_PROBABILITY       0.65f /* 普通命令的应用层概率门槛 */
+#define VOICE_PLAY_MIN_PROBABILITY  0.55f /* “播放”及同义词单独使用的门槛，避免短词被统一高门槛丢弃 */
+#define VOICE_PLAY_SETTLE_MS        400U /* 播放候选后等待语音结束，给“第一首/第二首”等后缀留下时间 */
+
+/* HC-SR04+ 手势开关：靠近触发一次，移开后重新允许下一次触发。 */
+#define ULTRASONIC_TRIGGER_MM       150U /* 连续靠近到 15 cm 内算一次感应，实际使用保持至少 2 cm */
+#define ULTRASONIC_RELEASE_MM       220U /* 移到 22 cm 外才解除遮挡，重新允许下一次感应 */
+#define ULTRASONIC_NEAR_SAMPLES     2U /* 连续 2 次近距离确认新的遮挡 */
+#define ULTRASONIC_CLEAR_SAMPLES    3U /* 连续 3 次远距离/无回波后重新允许触发，不改变播放状态 */
+
+#if ULTRASONIC_TRIGGER_MM < 20U || ULTRASONIC_RELEASE_MM <= ULTRASONIC_TRIGGER_MM || ULTRASONIC_RELEASE_MM > 4000U
+#error "Ultrasonic thresholds must satisfy 20 <= TRIGGER_MM < RELEASE_MM <= 4000"
+#endif
+#if ULTRASONIC_NEAR_SAMPLES < 1U || ULTRASONIC_NEAR_SAMPLES > 255U || ULTRASONIC_CLEAR_SAMPLES < 1U || ULTRASONIC_CLEAR_SAMPLES > 255U
+#error "Ultrasonic confirmation counts must be between 1 and 255"
+#endif
 
 #if PLAYER_VOLUME_PERCENT > 100U
 #error "PLAYER_VOLUME_PERCENT must be between 0 and 100"
@@ -199,7 +234,7 @@
 #define KEYPAD_DEBOUNCE_US          20000LL /* 矩阵原始位图连续不变多久才接受，单位 us；20 ms */
 #define BOOT_DEBOUNCE_US            50000LL /* BOOT 电平稳定时间，单位 us；50 ms，用于过滤机械抖动 */
 #define BOOT_SWITCH_GUARD_US        300000LL /* 一次有效 BOOT 动作后禁止紧接着重复触发的间隔，单位 us */
-#define BOOT_SETTINGS_HOLD_US       1000000LL /* BOOT 稳定按住达到 1 秒后切换设置视图，单位 us */
+#define BOOT_ENTER_HOLD_US       1000000LL /* BOOT 长按 1 秒进入选中功能，或返回开始界面 */
 #define SETTINGS_REPEAT_DELAY_US    500000LL /* 加减键首次按下后开始连发前的等待，单位 us；500 ms */
 #define SETTINGS_REPEAT_INTERVAL_US 100000LL /* 设置加减键长按连发间隔，单位 us；100 ms */
 #define PIANO_BUFFER_FRAMES         256U /* 一次生成并写出的琴音帧数；不得超过 AUDIO_BUFFER_FRAMES */
@@ -218,6 +253,23 @@
 #define RGB_TASK_CORE               0 /* RGB 任务固定在 CPU0，RMT 发送不占用播放器任务 */
 #define RGB_TASK_PRIORITY           1 /* RGB 为低优先级效果任务，允许采集、SD 和 AFE 优先运行 */
 #define RGB_TASK_STACK_SIZE         3072 /* RGB 任务栈字节数，包含 RMT 调用和日志临时空间 */
+
+/* HC-SR04+ 使用 3V3 供电，GPIO3 接 Trig 输入，GPIO47 直接接 Echo。
+ * GPIO3 兼有 JTAG 启动配置功能，不要在 Trig 上外加强上拉或接外部输出。
+ * 与 WS2812 使用相同 RMT 默认时钟源，RX/TX 为独立通道。
+ */
+#define ULTRASONIC_TRIG_GPIO         GPIO_NUM_3
+#define ULTRASONIC_ECHO_GPIO         GPIO_NUM_47
+#define ULTRASONIC_RESOLUTION_HZ     1000000U /* 1 tick = 1 us，由 RMT 硬件测量，免软件忙等 */
+#define ULTRASONIC_GLITCH_NS         1000U /* 1 us；毛刺滤波使用组时钟计数，80 MHz 下上限约 3187 ns */
+#define ULTRASONIC_SAMPLE_MS         80U /* 大于模块要求的 60 ms 测量周期 */
+#define ULTRASONIC_IDLE_US           30000U /* 无电平变化 30 ms 后结束 RMT 接收，小于 15 位计数上限 */
+#define ULTRASONIC_RX_TIMEOUT_MS     70U /* 4 m 回波加末尾低电平等待约 54 ms，额外留出调度余量 */
+#define ULTRASONIC_MIN_ECHO_US       116U /* 2 cm，低于模块保证量程的脉冲忽略 */
+#define ULTRASONIC_MAX_ECHO_US       23200U /* 4 m，超时/卡高电平不能当作近距离 */
+#define ULTRASONIC_TASK_CORE         0
+#define ULTRASONIC_TASK_PRIORITY     2
+#define ULTRASONIC_TASK_STACK_SIZE   4096
 
 /* 照片中的 microSD 模块使用标准四线 SPI；独占 SPI3，不影响显示屏 SPI2。 */
 #define SD_SPI_HOST                 SPI3_HOST /* SD 独占 SPI3 主机，与 TFT 的 SPI2 分开 */
@@ -260,11 +312,13 @@
 #define TFT_HEIGHT                  240U /* 可见区域高度，单位像素 */
 #define TFT_X_OFFSET                0U /* ST7789 显存列偏移，用于匹配不同面板的可见窗口 */
 #define TFT_Y_OFFSET                0U /* ST7789 显存行偏移，本块屏幕使用 0 */
-#define TFT_SPI_CLOCK_HZ            (20U * 1000U * 1000U) /* 20 MHz；整屏像素理论传输 46.08 ms，长线不稳定时可降低此值 */
-#define TFT_STREAM_ROWS             16U /* 每块最多 16 行，整屏只需 15 块；DMA 缓冲 7680 字节 */
+#define TFT_SPI_CLOCK_HZ            (40U * 1000U * 1000U) /* 40 MHz；整屏像素理论 23.04 ms，花屏时退回 20 MHz 并检查连线 */
+#define TFT_STREAM_ROWS             16U /* 每块最多 16 行，整屏 15 块；每个 DMA 缓冲 7680 字节 */
+#define TFT_STREAM_BUFFER_COUNT      2U /* 一块 DMA 发送时准备另一块；内存不足时自动回退单缓冲 */
 #define TFT_STREAM_PIXELS           (TFT_WIDTH * TFT_STREAM_ROWS) /* 流式发送缓冲像素数，字节数还需乘 2 */
 #define TFT_DIRTY_STRIP_ROWS         16U /* 每 16 行计算变化包围框，避免相隔很远的琴键被合并成大矩形 */
-#define DISPLAY_MIN_FRAME_MS         20U /* 局部画面更新最多约 50 次/秒；静态画面不刷新 */
+#define TFT_REGION_MERGE_EXTRA_PIXELS 128U /* 小量额外像素换取更少窗口命令，避免稀疏区域过度合并 */
+#define DISPLAY_MIN_FRAME_MS         17U /* 动态局部画面最多约 59 次/秒；静态画面不刷新 */
 #define DISPLAY_RETRY_MS             100U /* SPI 失败后重试最新画面，避免紧循环刷错误日志 */
 #define DISPLAY_STATS_INTERVAL_US   5000000LL /* 最多每 5 秒输出一次实际绘制/传输耗时统计 */
 
@@ -318,6 +372,9 @@ typedef struct {
 typedef enum {
     PLAYER_MODE_MUSIC = 0, /* SD WAV 循环播放，启用离线语音 */
     PLAYER_MODE_PIANO,     /* 矩阵键盘单音演奏，暂停麦克风/语音任务 */
+    PLAYER_MODE_TRANSFER,  /* Wi-Fi HTTP WAV 上传/下载，独占 SD 文件读写 */
+    PLAYER_MODE_SETTINGS,  /* 独立音量设置页 */
+    PLAYER_MODE_HOME,      /* 开屏后的四宫格开始页 */
 } player_mode_t;
 
 /*
@@ -367,7 +424,12 @@ static rmt_channel_handle_t s_rgb_channel = NULL; /* RGB 任务持有的 RMT TX 
 static rmt_encoder_handle_t s_rgb_encoder = NULL; /* 将 GRB 字节编码为 RMT 波形的编码器 */
 static bool s_tft_ready = false; /* 屏幕全部初始化命令成功后为 true；失败时音频仍可运行 */
 static uint16_t *s_tft_framebuffer = NULL; /* 240×240 RGB565 主机字节序帧缓冲，优先在 PSRAM 分配 */
-static uint16_t *s_tft_stream_buffer = NULL; /* 内部 DMA RAM 的 16 行发送缓存，转换为屏幕字节顺序后发送 */
+static uint16_t *s_tft_stream_buffer = NULL; /* 连续分配的内部 DMA 缓冲，每块 16 行，发送前交换字节序 */
+static unsigned s_tft_buffer_count = TFT_STREAM_BUFFER_COUNT;
+static spi_transaction_t s_tft_pixel_transactions[TFT_STREAM_BUFFER_COUNT]; /* 常驻描述符，回收前不能改写 */
+static unsigned s_tft_pending_transfers = 0U; /* 只由启动/显示任务串行操作；未回收事务数量 */
+static uint32_t s_tft_last_flush_us = 0U; /* 差分比较、像素打包和 SPI 完成的合计耗时 */
+static uint32_t s_tft_last_region_count = 0U;
 static uint16_t *s_tft_previous_frame = NULL; /* PSRAM 中上一幅成功发送画面的副本，用于逐像素比较；分配失败可退回整屏刷新 */
 static bool s_tft_frame_valid = false; /* 屏幕与缓存同步；任何 SPI 失败均清零，下一次强制整屏修复 */
 static uint32_t s_tft_last_transfer_pixels = 0U; /* 最近一次成功提交的像素数，供显示任务统计传输量 */
@@ -384,11 +446,12 @@ static int64_t s_keypad_changed_us = 0; /* 矩阵候选位图最近改变的时�
 static uint16_t s_keypad_candidate = 0U; /* 尚在等待消抖的原始矩阵位图 */
 static uint16_t s_piano_keys = 0U; /* 已接受的琴键位图；0 无键，多位为 1 时单音策略静音 */
 static bool s_keypad_ready = false; /* 矩阵引脚检查和 GPIO 配置成功标志 */
-static player_mode_t s_mode = PLAYER_MODE_MUSIC; /* 用户请求的当前模式；player_task 另用 audio_mode 跟踪已完成的切换 */
+static player_mode_t s_mode = PLAYER_MODE_HOME; /* 用户请求的当前模式；player_task 另用 audio_mode 跟踪已完成的切换 */
 static bool s_button_latched = false; /* 稳定按下事件已记录，避免按住期间重复产生短按 */
 static bool s_button_press_valid = false; /* 本次按下是否通过重复操作间隔限制 */
 static bool s_button_long_handled = false; /* 本次长按已处理；松开时不可再执行短按模式切换 */
 static int64_t s_button_pressed_us = 0; /* 本次 BOOT 按下开始时间，单位 us，用于 1 秒长按判断 */
+static uint8_t s_home_selection = 0U; /* 0 音乐、1 电子琴、2 传输、3 设置 */
 static bool s_settings_open = false; /* 是否显示音量设置；视图独立于音乐/电子琴模式 */
 static player_mode_t s_settings_target = PLAYER_MODE_MUSIC; /* 设置页面当前选中的音量对象，不等于正在播放的模式 */
 static uint16_t s_keypad_stable = 0U; /* 最近接受的稳定矩阵位图，避免重复处理相同输入 */
@@ -399,8 +462,16 @@ static uint8_t s_volume_percent = PLAYER_VOLUME_PERCENT; /* 音乐运行期音�
 static uint8_t s_saved_volume_percent = PLAYER_VOLUME_PERCENT; /* 音乐最近一次非零音量，用于“取消静音”；不写入 NVS */
 static uint8_t s_piano_volume_percent = PIANO_VOLUME_PERCENT; /* 电子琴独立音量百分比，另有 PIANO_VOLUME_DIVISOR 衰减 */
 static uint8_t s_piano_saved_volume_percent = PIANO_VOLUME_PERCENT; /* 电子琴最近一次非零音量，用于恢复静音前的设置 */
-static bool s_paused = false; /* 用户暂停标志；WAV 不推进文件位置，电子琴也停止发声 */
+static bool s_paused = false; /* 语音/手势共用的暂停标志；WAV 不推进文件位置，电子琴也停止发声 */
+static bool s_ultrasonic_was_blocked = false; /* 播放器上次读取的遮挡状态，只检测未遮挡 -> 遮挡的边沿 */
+static atomic_bool s_ultrasonic_blocked = ATOMIC_VAR_INIT(false); /* 测距任务只发布此值，不直接改播放器状态 */
 static bool s_listening = false; /* 语音命令窗口标志，期间输出静音以减少播放器对识别的干扰 */
+/* 歌曲时间只由播放器更新，显示任务通过快照读取，单位为音频已提交秒数。
+ * 进度由实际 WAV data 字节计算，暂停/监听期间不前进，不用墙钟推测播放位置。
+ */
+static uint32_t s_track_elapsed_seconds = 0U;
+static uint32_t s_track_duration_seconds = 0U;
+static uint16_t s_track_progress_permille = 0U;
 static bool s_player_started = false; /* I2S TX 初始化成功并进入播放器主循环后为 true */
 /* 播放任务发布单个原子状态：-1 熄灭，-2 音乐呼吸，0~15 电子琴键号。
  * RGB 任务不直接跨核读取播放器的模式、按键等多个状态。
@@ -413,7 +484,8 @@ static bool s_sd_bus_initialized = false; /* SPI3 总线已经初始化，控制
 static sdmmc_card_t *s_sd_card = NULL; /* 挂载 API 分配的卡对象；卸载后立即清空，避免悬空指针 */
 static uint32_t s_sd_probe_frequency_khz = SD_SPI_PROBE_FAST_KHZ; /* 本次卡识别使用的探测时钟，由时钟包装函数读取 */
 static uint32_t s_sd_clock_limit_khz = SD_SPI_FAST_FREQUENCY_KHZ; /* 当前运行期 SD 工作时钟上限；恢复时从 10 降到 4 再到 2 MHz */
-static bool s_sd_recovery_requested = false; /* 播放器检测到 SD 传输故障后置位，恢复成功才清除 */
+static bool s_sd_scanned = false; /* 首次按需挂载时扫描，恢复挂载保留目录 */
+static bool s_sd_recovery_requested = true; /* 播放器检测到 SD 传输故障后置位，恢复成功才清除 */
 static bool s_sd_loading = false; /* 运行期恢复/失败等待期间显示加载状态；设置和电子琴页面优先 */
 static int64_t s_sd_retry_after_us = 0; /* 整轮恢复失败后，下次尝试的最早时间，单位 us */
 static atomic_uint s_sd_mount_attempt = ATOMIC_VAR_INIT(0U); /* SD 临时任务向播放器发布的当前尝试序号；0 表示尚未开始 */
@@ -458,13 +530,22 @@ typedef enum {
     PLAYER_SONG_TWO,
     PLAYER_LISTEN_START, /* 以下为应用内部事件，不加入 SPEECH_COMMANDS 识别表 */
     PLAYER_LISTEN_END,
-    PLAYER_TOGGLE_MODE,
+    PLAYER_BOOT_SHORT,
+    PLAYER_BOOT_LONG,
 } player_command_t;
 
 typedef struct {
     uint8_t song_index; /* 当前曲目索引快照，显示时转为从 1 开始 */
+    uint8_t track_count;
+    char track_path[SD_PATH_BUFFER_BYTES]; /* 显示任务只读取快照，不直接访问可更新的播放列表 */
+    uint8_t home_selection;
+    int wifi_status; /* 0 关闭，1 初始化，2 就绪，-1 失败 */
+    uint32_t wifi_sta_ip;
+    int transfer_state; /* 0 等待，1 传输，2 完成，-1 失败，-2 取消 */
+    uint32_t transfer_bytes;
+    uint32_t transfer_total;
     uint8_t volume_percent; /* 当前模式音量快照，供主播放/电子琴页面使用 */
-    bool paused; /* 用户暂停状态快照 */
+    bool paused; /* 语音/手势共同控制的暂停状态快照 */
     bool listening; /* 语音命令窗口状态快照 */
     bool player_started; /* TX 初始化完成状态快照 */
     bool voice_ready; /* 语音初始化可用且当前激活，两项条件的合并结果 */
@@ -477,6 +558,9 @@ typedef struct {
     uint8_t piano_volume_percent; /* 设置页面显示的电子琴音量 */
     bool sd_loading; /* 是否显示运行期 SD 恢复加载页 */
     uint32_t sd_mount_attempt; /* 原子进度复制到快照后的挂载尝试序号 */
+    uint32_t track_elapsed_seconds; /* 当前 WAV 已提交到 I2S 的整秒数 */
+    uint32_t track_duration_seconds; /* WAV data_size / 字节率得到的总时长 */
+    uint16_t track_progress_permille; /* 当前音频帧位置，0~1000；仅用于显示进度条 */
 } display_update_t;
 
 /* SR 任务只提交消息；播放任务独占歌曲、音量及画面业务状态，
@@ -492,7 +576,7 @@ static QueueHandle_t s_display_updates = NULL; /* 播放器生产、显示消费
  */
 static uint8_t player_track_count(void)
 {
-    return s_sd_wav_count;
+    return s_sd_scanned ? s_sd_wav_count : 0U;
 }
 
 /**
@@ -503,7 +587,7 @@ static uint8_t player_track_count(void)
  */
 static const char *player_track_name(uint8_t track_index)
 {
-    return track_index < s_sd_wav_count
+    return s_sd_scanned && track_index < s_sd_wav_count
         ? s_sd_wav_files[track_index].display_name : "NO WAV FILES";
 }
 
@@ -517,6 +601,32 @@ static uint8_t player_current_volume(void)
     return s_mode == PLAYER_MODE_PIANO ? s_piano_volume_percent : s_volume_percent;
 }
 
+/* 语音“播放/暂停”和音乐模式下的手势都修改同一个暂停状态。 */
+static bool player_is_paused(void)
+{
+    return s_paused;
+}
+
+/* 只在一次新遮挡时切换；移开和持续遮挡都不改播放状态。
+ * 电子琴也更新边沿记忆，但不触发，避免切回音乐时重复消费已保持的手势。
+ * 返回 true 表示本次确实切换了播放/暂停，供调用方刷新画面并记日志。
+ */
+static atomic_bool s_transfer_enabled = ATOMIC_VAR_INIT(false);
+static atomic_int s_wifi_status = ATOMIC_VAR_INIT(0);
+static atomic_uint s_wifi_sta_ip = ATOMIC_VAR_INIT(0U);
+static atomic_int s_transfer_state = ATOMIC_VAR_INIT(0);
+static atomic_uint s_transfer_bytes = ATOMIC_VAR_INIT(0U);
+static atomic_uint s_transfer_total = ATOMIC_VAR_INIT(0U);
+
+static bool player_apply_ultrasonic_gesture(bool blocked)
+{
+    const bool new_gesture = blocked && !s_ultrasonic_was_blocked;
+    s_ultrasonic_was_blocked = blocked;
+    if (!new_gesture || s_mode != PLAYER_MODE_MUSIC) { return false; }
+    s_paused = !s_paused;
+    return true;
+}
+
 /**
  * 由当前播放器状态构造一份完整画面快照，并覆盖显示队列中的旧快照。
  * 调用者：启动初始化流程或播放器任务；语音任务不能直接读取/改写这些业务状态。
@@ -527,10 +637,17 @@ static uint8_t player_current_volume(void)
 static void display_request_update(void)
 {
     if (s_display_updates == NULL) { return; }
-    const display_update_t update = {
+    display_update_t update = {
         .song_index = s_song_index,
+        .track_count = s_sd_scanned ? s_sd_wav_count : 0U,
+        .home_selection = s_home_selection,
+        .wifi_status = atomic_load(&s_wifi_status),
+        .wifi_sta_ip = atomic_load(&s_wifi_sta_ip),
+        .transfer_state = atomic_load(&s_transfer_state),
+        .transfer_bytes = atomic_load(&s_transfer_bytes),
+        .transfer_total = atomic_load(&s_transfer_total),
         .volume_percent = player_current_volume(),
-        .paused = s_paused,
+        .paused = player_is_paused(),
         .listening = s_listening,
         .player_started = s_player_started,
         .voice_ready = s_voice_ready && s_voice_active,
@@ -541,10 +658,215 @@ static void display_request_update(void)
         .settings_target = s_settings_target,
         .music_volume_percent = s_volume_percent,
         .piano_volume_percent = s_piano_volume_percent,
+        .track_elapsed_seconds = s_track_elapsed_seconds,
+        .track_duration_seconds = s_track_duration_seconds,
+        .track_progress_permille = s_track_progress_permille,
         .sd_loading = s_sd_loading,
         .sd_mount_attempt = atomic_load_explicit(&s_sd_mount_attempt, memory_order_relaxed),
     };
+    if (s_sd_scanned && s_song_index < s_sd_wav_count) {
+        (void)snprintf(update.track_path, sizeof(update.track_path), "%s",
+                       s_sd_wav_files[s_song_index].relative_path);
+    }
     (void)xQueueOverwrite(s_display_updates, &update);
+}
+
+/* --------------------------- HC-SR04+ 手势暂停 --------------------------- */
+
+typedef struct {
+    bool blocked;
+    uint8_t near_count;
+    uint8_t clear_count;
+} ultrasonic_filter_t;
+
+/* 一个回波应只有一个高脉冲；忽略超短噪声、超量程、卡高和多脉冲。
+ * 1 MHz RMT 下持续时间单位为 us，distance_mm = echo_us * 10 / 58。
+ * 返回 0 表示没有有效回波，连续多次才认为手掌已移开。
+ */
+static uint32_t ultrasonic_distance_mm(const rmt_symbol_word_t *symbols, size_t count)
+{
+    uint32_t echo_us = 0U;
+    unsigned high_pulses = 0U;
+    for (size_t index = 0U; index < count; ++index) {
+        if (symbols[index].level0 != 0U && symbols[index].duration0 != 0U) {
+            echo_us = symbols[index].duration0;
+            ++high_pulses;
+        }
+        if (symbols[index].level1 != 0U && symbols[index].duration1 != 0U) {
+            echo_us = symbols[index].duration1;
+            ++high_pulses;
+        }
+    }
+    if (high_pulses != 1U || echo_us < ULTRASONIC_MIN_ECHO_US ||
+        echo_us > ULTRASONIC_MAX_ECHO_US) { return 0U; }
+    return (echo_us * 10U + 29U) / 58U;
+}
+
+/* 2 次靠近确认遮挡，3 次远离/无回波确认移开；回差区域清计数但保留遮挡状态。
+ * 这里只输出稳定遮挡电平，不决定播放状态；移开只允许下一次手势触发。
+ */
+static bool ultrasonic_filter_update(ultrasonic_filter_t *filter, uint32_t distance_mm)
+{
+    if (distance_mm != 0U && distance_mm <= ULTRASONIC_TRIGGER_MM) {
+        filter->clear_count = 0U;
+        if (filter->near_count < ULTRASONIC_NEAR_SAMPLES) { ++filter->near_count; }
+        if (filter->near_count >= ULTRASONIC_NEAR_SAMPLES) { filter->blocked = true; }
+    } else if (distance_mm == 0U || distance_mm >= ULTRASONIC_RELEASE_MM) {
+        filter->near_count = 0U;
+        if (filter->clear_count < ULTRASONIC_CLEAR_SAMPLES) { ++filter->clear_count; }
+        if (filter->clear_count >= ULTRASONIC_CLEAR_SAMPLES) { filter->blocked = false; }
+    } else {
+        filter->near_count = filter->clear_count = 0U;
+    }
+    return filter->blocked;
+}
+
+/* 可选模块有冲突时只禁用测距，先于 gpio_config/RMT 分配检查，保留已有外设。 */
+static bool ultrasonic_pins_available(void)
+{
+    const int pins[] = {ULTRASONIC_TRIG_GPIO, ULTRASONIC_ECHO_GPIO};
+    const int occupied[] = {
+        I2S_BCLK_GPIO, I2S_LRC_GPIO, I2S_DIN_GPIO, BOOT_BUTTON_GPIO,
+        KEYPAD_C1_GPIO, KEYPAD_C2_GPIO, KEYPAD_C3_GPIO, KEYPAD_C4_GPIO,
+        KEYPAD_R1_GPIO, KEYPAD_R2_GPIO, KEYPAD_R3_GPIO, KEYPAD_R4_GPIO,
+        TFT_SCLK_GPIO, TFT_MOSI_GPIO, TFT_RST_GPIO, TFT_DC_GPIO, TFT_BL_GPIO,
+        SD_CS_GPIO, SD_MOSI_GPIO, SD_SCK_GPIO, SD_MISO_GPIO,
+        MIC_BCLK_GPIO, MIC_WS_GPIO, MIC_DATA_GPIO, RGB_LED_GPIO,
+        GPIO_NUM_19, GPIO_NUM_20, GPIO_NUM_43, GPIO_NUM_44, GPIO_NUM_45, GPIO_NUM_46,
+    };
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(pins[0]) || !GPIO_IS_VALID_GPIO(pins[1]) ||
+        pins[0] == pins[1]) { return false; }
+    for (unsigned index = 0U; index < ARRAY_SIZE(pins); ++index) {
+#if CONFIG_SPIRAM_MODE_OCT || CONFIG_ESPTOOLPY_OCT_FLASH
+        if (pins[index] >= 26 && pins[index] <= 37) { return false; }
+#else
+        if (pins[index] >= 26 && pins[index] <= 32) { return false; }
+#endif
+        for (unsigned used = 0U; used < ARRAY_SIZE(occupied); ++used) {
+            if (pins[index] == occupied[used]) { return false; }
+        }
+    }
+    return true;
+}
+
+/* 回调只投递描述符，任务在下次接收前解析固定缓冲；ISR 不做日志/距离计算。 */
+static bool IRAM_ATTR ultrasonic_rx_done(rmt_channel_handle_t channel,
+                                        const rmt_rx_done_event_data_t *event, void *context)
+{
+    (void)channel;
+    BaseType_t wakeup = pdFALSE;
+    (void)xQueueSendFromISR((QueueHandle_t)context, event, &wakeup);
+    return wakeup == pdTRUE;
+}
+
+/* 缓冲常驻内部 SRAM，驱动接收中或 ISR 回调尚未结束时不得复用/释放。 */
+static DRAM_ATTR rmt_symbol_word_t s_ultrasonic_symbols[64];
+
+static void ultrasonic_task(void *argument)
+{
+    (void)argument;
+    rmt_channel_handle_t rx = NULL;
+    QueueHandle_t received = NULL;
+    bool enabled = false;
+    esp_err_t error = ESP_ERR_INVALID_ARG;
+    if (!ultrasonic_pins_available()) { goto failed; }
+
+    const gpio_config_t trigger = {
+        .pin_bit_mask = 1ULL << (uint32_t)ULTRASONIC_TRIG_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    error = gpio_config(&trigger);
+    if (error != ESP_OK) { goto failed; }
+    error = gpio_set_level(ULTRASONIC_TRIG_GPIO, 0);
+    if (error != ESP_OK) { goto failed; }
+    received = xQueueCreate(1U, sizeof(rmt_rx_done_event_data_t));
+    if (received == NULL) { error = ESP_ERR_NO_MEM; goto failed; }
+    const rmt_rx_channel_config_t config = {
+        .gpio_num = ULTRASONIC_ECHO_GPIO,
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = ULTRASONIC_RESOLUTION_HZ,
+        .mem_block_symbols = 64U,
+    };
+    error = rmt_new_rx_channel(&config, &rx);
+    if (error != ESP_OK) { goto failed; }
+    /* 模块未连接时稳定为低；只改变 Echo，不改现有键盘/麦克风 GPIO。 */
+    error = gpio_set_pull_mode(ULTRASONIC_ECHO_GPIO, GPIO_PULLDOWN_ONLY);
+    if (error != ESP_OK) { goto failed; }
+    const rmt_rx_event_callbacks_t callbacks = {.on_recv_done = ultrasonic_rx_done};
+    error = rmt_rx_register_event_callbacks(rx, &callbacks, received);
+    if (error != ESP_OK) { goto failed; }
+    error = rmt_enable(rx);
+    if (error != ESP_OK) { goto failed; }
+    enabled = true;
+    /* 先等待模块上电稳定，再开始触发；等待不占用播放器任务。 */
+    vTaskDelay(pdMS_TO_TICKS(100));
+    const rmt_receive_config_t receive_config = {
+        /* 此过滤器不是按通道的 1 MHz 测距时钟计数；不能设为 10 us。 */
+        .signal_range_min_ns = ULTRASONIC_GLITCH_NS,
+        .signal_range_max_ns = ULTRASONIC_IDLE_US * 1000U,
+    };
+    ultrasonic_filter_t filter = {0};
+    bool ready_reported = false;
+    while (true) {
+        const int64_t started_us = esp_timer_get_time();
+        error = rmt_receive(rx, s_ultrasonic_symbols, sizeof(s_ultrasonic_symbols), &receive_config);
+        if (error != ESP_OK) { goto failed; }
+        /* 仅触发脉冲占用约 12 us，整段 Echo 计时由 RMT 完成。 */
+        (void)gpio_set_level(ULTRASONIC_TRIG_GPIO, 1);
+        esp_rom_delay_us(12U);
+        (void)gpio_set_level(ULTRASONIC_TRIG_GPIO, 0);
+        rmt_rx_done_event_data_t event;
+        uint32_t distance_mm = 0U;
+        if (xQueueReceive(received, &event, pdMS_TO_TICKS(ULTRASONIC_RX_TIMEOUT_MS)) == pdTRUE) {
+            distance_mm = ultrasonic_distance_mm(event.received_symbols, event.num_symbols);
+        } else {
+            /* 回调延迟或噪声拖延接收时，先停 RX 再清队列，避免旧测量污染新一轮。 */
+            error = rmt_disable(rx);
+            if (error != ESP_OK) { goto failed; }
+            enabled = false;
+            (void)xQueueReset(received);
+            error = rmt_enable(rx);
+            if (error != ESP_OK) { goto failed; }
+            enabled = true;
+        }
+        const bool blocked = ultrasonic_filter_update(&filter, distance_mm);
+        atomic_store_explicit(&s_ultrasonic_blocked, blocked, memory_order_relaxed);
+        /* rmt_enable 不校验测量参数；首次 rmt_receive 成功后再报告就绪。 */
+        if (!ready_reported) {
+            ESP_LOGI(TAG, "HC-SR04+ ready: VCC=3V3 TRIG=%d ECHO=%d; toggle<=%u mm, rearm>=%u mm; filter=%u ns",
+                     ULTRASONIC_TRIG_GPIO, ULTRASONIC_ECHO_GPIO,
+                     (unsigned)ULTRASONIC_TRIGGER_MM, (unsigned)ULTRASONIC_RELEASE_MM,
+                     (unsigned)ULTRASONIC_GLITCH_NS);
+            ready_reported = true;
+        }
+        /* 从本次触发结束计算剩余间隔，长时间调度延迟后也不补发密集脉冲。 */
+        const int64_t rest_us = (int64_t)ULTRASONIC_SAMPLE_MS * 1000LL -
+                                (esp_timer_get_time() - started_us);
+        if (rest_us > 0) {
+            vTaskDelay(pdMS_TO_TICKS((uint32_t)((rest_us + 999LL) / 1000LL)));
+        } else { vTaskDelay(1U); }
+    }
+
+failed:
+    /* 测距失败时释放资源并发布未遮挡，不切换当前播放/暂停状态。 */
+    atomic_store_explicit(&s_ultrasonic_blocked, false, memory_order_relaxed);
+    ESP_LOGW(TAG, "HC-SR04+ disabled: %s; normal playback remains available", esp_err_to_name(error));
+    if (enabled && rmt_disable(rx) != ESP_OK) {
+        /* 无法确认 RX 已停时保留队列，避免延迟 ISR 使用已经释放的 context。 */
+        ESP_LOGW(TAG, "Cannot stop ultrasonic RX; retaining callback resources");
+        vTaskDelete(NULL);
+        return;
+    }
+    if (rx != NULL && rmt_del_channel(rx) != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot delete ultrasonic RX; retaining callback queue");
+        vTaskDelete(NULL);
+        return;
+    }
+    if (received != NULL) { vQueueDelete(received); }
+    vTaskDelete(NULL);
 }
 
 /* ------------------------- WS2812 RGB 音乐/琴键灯效 ------------------------- */
@@ -783,8 +1105,15 @@ static bool player_post_command(player_command_t command)
  */
 static void player_apply_command(player_command_t command)
 {
+    /* 音乐页短按复用“下一首”，共享循环切歌、无曲目保护和进度重置。 */
+    if (command == PLAYER_BOOT_SHORT && s_mode == PLAYER_MODE_MUSIC) {
+        command = PLAYER_NEXT;
+    }
+    /* 模式退出后忽略语音任务可能已排队的旧命令。BOOT 始终由此任务处理。 */
+    const bool boot_command = command == PLAYER_BOOT_SHORT || command == PLAYER_BOOT_LONG;
+    if (!boot_command && s_mode != PLAYER_MODE_MUSIC) { return; }
     /* 设置可选中非当前模式的音量，所以先确定本条命令真正修改的音量对象。 */
-    const uint8_t track_count = player_track_count();
+    const uint8_t track_count = s_sd_scanned ? player_track_count() : 0U;
     const player_mode_t volume_mode = s_settings_open ? s_settings_target : s_mode;
     uint8_t *volume = volume_mode == PLAYER_MODE_PIANO
         ? &s_piano_volume_percent : &s_volume_percent;
@@ -815,12 +1144,28 @@ static void player_apply_command(player_command_t command)
             s_paused = false;
             break;
         }
-        case PLAYER_TOGGLE_MODE:
-            s_mode = s_mode == PLAYER_MODE_MUSIC ? PLAYER_MODE_PIANO : PLAYER_MODE_MUSIC;
+        case PLAYER_BOOT_SHORT:
+            if (s_mode != PLAYER_MODE_HOME) { return; }
+            s_home_selection = (uint8_t)((s_home_selection + 1U) % 4U);
+            break;
+        case PLAYER_BOOT_LONG:
+            if (s_mode == PLAYER_MODE_HOME) {
+                s_mode = (player_mode_t)s_home_selection;
+                s_settings_open = s_mode == PLAYER_MODE_SETTINGS;
+            } else {
+                /* HTTP 接收/发送循环立即观察到取消；主循环停止服务器后才再访问 SD。 */
+                atomic_store(&s_transfer_enabled, false);
+                s_mode = PLAYER_MODE_HOME;
+                s_settings_open = false;
+            }
             s_switch_requested = true;
             s_piano_keys = 0U;
             s_keypad_wait_release = true;
-            ESP_LOGI(TAG, "BOOT mode: %s", s_mode == PLAYER_MODE_PIANO ? "PIANO" : "MUSIC");
+            s_settings_last_key = -1;
+            s_listening = false;
+            s_paused = false;
+            rgb_set_output(RGB_OUTPUT_OFF);
+            ESP_LOGI(TAG, "BOOT page=%d selection=%u", s_mode, (unsigned)s_home_selection);
             break;
         case PLAYER_PAUSE: s_paused = true; break;
         case PLAYER_RESUME: s_paused = false; break;
@@ -840,6 +1185,11 @@ static void player_apply_command(player_command_t command)
         default: return;
     }
     if (*volume > 0U) { *saved_volume = *volume; }
+    if (s_switch_requested && s_mode == PLAYER_MODE_MUSIC) {
+        /* 新曲/返回音乐会从头重新 fopen，先清旧曲进度，避免标题与旧时间混在一帧。 */
+        s_track_elapsed_seconds = s_track_duration_seconds = 0U;
+        s_track_progress_permille = 0U;
+    }
     display_request_update();
     ESP_LOGI(TAG, "Control=%d track=%u/%u name=%s volume=%u%% paused=%d listening=%d",
              command, (unsigned)(s_song_index + 1U), (unsigned)track_count,
@@ -869,58 +1219,6 @@ static const uint16_t MIDI_FREQUENCY_HZ[] = {
 #define COLOR_WHITE      RGB565(239, 245, 255)
 #define COLOR_MUTED      RGB565(123, 140, 177)
 
-typedef struct {
-    char character; /* 此字形对应的单字节 ASCII 字符 */
-    uint8_t rows[7]; /* 7 行点阵，每行低 5 位有效，从 bit4 到 bit0 为左到右 */
-} glyph_t;
-
-/* 播放界面只需大写拉丁字母、数字及少量符号。每行低 5 bit 为像素。 */
-static const glyph_t FONT_5X7[] = {
-    {' ', {0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
-    {'+', {0x00,0x04,0x04,0x1F,0x04,0x04,0x00}},
-    {':', {0x00,0x04,0x00,0x00,0x04,0x00,0x00}},
-    {'>', {0x10,0x08,0x04,0x02,0x04,0x08,0x10}},
-    {'%', {0x19,0x1A,0x04,0x04,0x0B,0x13,0x00}},
-    {'-', {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}},
-    {'/', {0x01,0x02,0x02,0x04,0x08,0x08,0x10}},
-    {'0', {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}},
-    {'1', {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
-    {'2', {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}},
-    {'3', {0x1E,0x01,0x01,0x0E,0x01,0x01,0x1E}},
-    {'4', {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}},
-    {'5', {0x1F,0x10,0x10,0x1E,0x01,0x01,0x1E}},
-    {'6', {0x0E,0x10,0x10,0x1E,0x11,0x11,0x0E}},
-    {'7', {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}},
-    {'8', {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}},
-    {'9', {0x0E,0x11,0x11,0x0F,0x01,0x01,0x0E}},
-    {'A', {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}},
-    {'B', {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}},
-    {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}},
-    {'D', {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}},
-    {'E', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}},
-    {'F', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}},
-    {'G', {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}},
-    {'H', {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}},
-    {'I', {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}},
-    {'J', {0x07,0x02,0x02,0x02,0x12,0x12,0x0C}},
-    {'K', {0x11,0x12,0x14,0x18,0x14,0x12,0x11}},
-    {'L', {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}},
-    {'M', {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}},
-    {'N', {0x11,0x19,0x19,0x15,0x13,0x13,0x11}},
-    {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
-    {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}},
-    {'Q', {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}},
-    {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
-    {'S', {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}},
-    {'T', {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}},
-    {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}},
-    {'V', {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}},
-    {'W', {0x11,0x11,0x11,0x15,0x15,0x1B,0x11}},
-    {'X', {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}},
-    {'Y', {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}},
-    {'Z', {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}},
-};
-
 /**
  * 向 ST7789 发送一次命令或数据 SPI 事务。
  * @param data_mode false 拉低 DC 发送命令；true 拉高 DC 发送参数/像素。
@@ -930,12 +1228,35 @@ static const glyph_t FONT_5X7[] = {
  * 运行期仅显示任务调用，DC 改变与 SPI 发送之间不应插入另一个发送者。
  * @return 参数校验、GPIO 切换或 SPI 传输的错误。
  */
+/* 描述符与 DMA 缓冲持续存在，只有拿回事务结果后才能重新使用。
+ * 命令前先回收像素事务，避免 DC 拉低时旧像素仍在发送。
+ */
+static esp_err_t tft_wait_pixel_transfer(void)
+{
+    if (s_tft_pending_transfers == 0U) { return ESP_OK; }
+    spi_transaction_t *completed = NULL;
+    const esp_err_t error = spi_device_get_trans_result(s_tft, &completed, portMAX_DELAY);
+    if (error == ESP_OK) { --s_tft_pending_transfers; }
+    return error;
+}
+
+static esp_err_t tft_drain_pixel_transfers(void)
+{
+    while (s_tft_pending_transfers > 0U) {
+        const esp_err_t error = tft_wait_pixel_transfer();
+        if (error != ESP_OK) { return error; }
+    }
+    return ESP_OK;
+}
+
 static esp_err_t tft_transmit(bool data_mode, const void *data, size_t byte_count)
 {
     if (s_tft == NULL || data == NULL || byte_count == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
-    const esp_err_t error = gpio_set_level(TFT_DC_GPIO, data_mode ? 1 : 0);
+    esp_err_t error = tft_drain_pixel_transfers();
+    if (error != ESP_OK) { return error; }
+    error = gpio_set_level(TFT_DC_GPIO, data_mode ? 1 : 0);
     if (error != ESP_OK) { return error; }
     spi_transaction_t transaction = {
         .length = byte_count * 8U,
@@ -986,19 +1307,6 @@ static esp_err_t tft_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t 
     if (error == ESP_OK) { error = tft_command(0x2BU, rows, sizeof(rows)); }
     if (error == ESP_OK) { error = tft_command(0x2CU, NULL, 0U); }
     return error;
-}
-
-/**
- * 发送流缓冲中已准备好的像素，长度换算为像素数 × 2 字节。
- * @param pixel_count 需发送的像素数量，不得超过 TFT_STREAM_PIXELS。
- * 缓冲中的每个 uint16 已交换字节顺序；本函数不再次转换。
- * 零像素是允许的空操作，直接返回 ESP_OK。
- */
-static esp_err_t tft_stream_flush(size_t pixel_count)
-{
-    return pixel_count == 0U ? ESP_OK
-                             : tft_transmit(true, s_tft_stream_buffer,
-                                            pixel_count * sizeof(uint16_t));
 }
 
 /* 变化区域使用包含端点的坐标，与 ST7789 CASET/RASET 窗口一致。 */
@@ -1055,21 +1363,50 @@ static esp_err_t tft_write_region(const tft_region_t *region)
     }
     esp_err_t error = tft_set_window(region->left, region->top, region->right, region->bottom);
     if (error != ESP_OK) { return error; }
-    size_t buffered = 0U;
-    for (uint16_t row = region->top; row <= region->bottom; ++row) {
-        const uint16_t *pixels = s_tft_framebuffer + (size_t)row * TFT_WIDTH;
-        for (uint16_t column = region->left; column <= region->right; ++column) {
-            s_tft_stream_buffer[buffered++] = __builtin_bswap16(pixels[column]);
-            if (buffered == TFT_STREAM_PIXELS) {
-                error = tft_stream_flush(buffered);
-                if (error != ESP_OK) { return error; }
-                buffered = 0U;
-            }
-        }
-    }
-    error = tft_stream_flush(buffered);
+    error = gpio_set_level(TFT_DC_GPIO, 1);
     if (error != ESP_OK) { return error; }
     const size_t width = (size_t)region->right - region->left + 1U;
+    const size_t total_pixels = width * ((size_t)region->bottom - region->top + 1U);
+    size_t position = 0U;
+    unsigned slot = 0U;
+    while (position < total_pixels) {
+        /* 两个描述符都在 DMA/结果队列时，先等最早一个完成，再覆盖它的缓冲。 */
+        if (s_tft_pending_transfers == s_tft_buffer_count) {
+            error = tft_wait_pixel_transfer();
+            if (error != ESP_OK) { break; }
+        }
+        const size_t remaining = total_pixels - position;
+        const size_t count = remaining < TFT_STREAM_PIXELS ? remaining : TFT_STREAM_PIXELS;
+        uint16_t *destination = s_tft_stream_buffer + (size_t)slot * TFT_STREAM_PIXELS;
+        size_t row = region->top + position / width;
+        size_t column = region->left + position % width;
+        size_t copied = 0U;
+        while (copied < count) {
+            size_t run = (size_t)region->right - column + 1U;
+            if (run > count - copied) { run = count - copied; }
+            const uint16_t *source = s_tft_framebuffer + row * TFT_WIDTH + column;
+            for (size_t pixel = 0U; pixel < run; ++pixel) {
+                destination[copied + pixel] = __builtin_bswap16(source[pixel]);
+            }
+            copied += run;
+            ++row;
+            column = region->left;
+        }
+        spi_transaction_t *transaction = &s_tft_pixel_transactions[slot];
+        *transaction = (spi_transaction_t){
+            .length = count * sizeof(uint16_t) * 8U,
+            .tx_buffer = destination,
+        };
+        error = spi_device_queue_trans(s_tft, transaction, portMAX_DELAY);
+        if (error != ESP_OK) { break; }
+        ++s_tft_pending_transfers;
+        position += count;
+        slot = (slot + 1U) % s_tft_buffer_count;
+    }
+    /* 出错也回收已提交的事务；首个错误保留，下一次强制整屏修复。 */
+    const esp_err_t drain_error = tft_drain_pixel_transfers();
+    if (error == ESP_OK) { error = drain_error; }
+    if (error != ESP_OK) { return error; }
     if (s_tft_previous_frame != NULL) {
         for (uint16_t row = region->top; row <= region->bottom; ++row) {
             const size_t offset = (size_t)row * TFT_WIDTH + region->left;
@@ -1077,31 +1414,52 @@ static esp_err_t tft_write_region(const tft_region_t *region)
                    width * sizeof(uint16_t));
         }
     }
-    s_tft_last_transfer_pixels += (uint32_t)(width * ((size_t)region->bottom - region->top + 1U));
+    s_tft_last_transfer_pixels += (uint32_t)total_pixels;
+    ++s_tft_last_region_count;
     return ESP_OK;
 }
 
 /**
  * 提交主帧缓冲：首次/传输失败后发整屏，其余时候只发与成功画面不同的矩形。
- * 每 16 行找一个变化包围框；相邻且左右边界相同的区域合并，整屏变化仍只设一次窗口。
+ * 每 16 行找变化包围框；相近区域在额外像素预算内合并，整屏变化只设一次窗口。
  * 没有像素改变时完全不发送 SPI；动态琴键、文字和音量条通常仅传少量像素。
  * 额外画面副本占用 115200 字节 PSRAM，分配失败时保留可用的整屏刷新方式。
  * SPI 出错会使 frame_valid 保持 false，显示任务即使没有新状态也会重试最新画面。
  * 本函数仅由启动绘制流程或运行期显示任务串行使用，不与其他任务并发读写帧缓冲。
  */
+static bool tft_merge_regions(tft_region_t *pending, const tft_region_t *changed)
+{
+    if ((uint32_t)changed->top > (uint32_t)pending->bottom + TFT_DIRTY_STRIP_ROWS + 1U) { return false; }
+    const uint16_t left = pending->left < changed->left ? pending->left : changed->left;
+    const uint16_t right = pending->right > changed->right ? pending->right : changed->right;
+    const uint32_t separate =
+        ((uint32_t)pending->right - pending->left + 1U) * ((uint32_t)pending->bottom - pending->top + 1U) +
+        ((uint32_t)changed->right - changed->left + 1U) * ((uint32_t)changed->bottom - changed->top + 1U);
+    const uint32_t combined = ((uint32_t)right - left + 1U) * ((uint32_t)changed->bottom - pending->top + 1U);
+    if (combined > separate + TFT_REGION_MERGE_EXTRA_PIXELS) { return false; }
+    pending->left = left;
+    pending->right = right;
+    pending->bottom = changed->bottom;
+    return true;
+}
+
 static esp_err_t tft_write_framebuffer(void)
 {
+    const int64_t started_us = esp_timer_get_time();
+    s_tft_last_flush_us = 0U;
+    s_tft_last_region_count = 0U;
+    s_tft_last_transfer_pixels = 0U;
     if (!s_tft_ready || s_tft_framebuffer == NULL || s_tft_stream_buffer == NULL) {
         s_tft_frame_valid = false;
         return ESP_ERR_INVALID_STATE;
     }
     const bool compare_previous = s_tft_frame_valid && s_tft_previous_frame != NULL;
     s_tft_frame_valid = false;
-    s_tft_last_transfer_pixels = 0U;
+    esp_err_t error = ESP_OK;
     if (!compare_previous) {
         const tft_region_t full = {0U, 0U, TFT_WIDTH - 1U, TFT_HEIGHT - 1U};
-        const esp_err_t error = tft_write_region(&full);
-        if (error != ESP_OK) { return error; }
+        error = tft_write_region(&full);
+        if (error != ESP_OK) { goto finished; }
     } else {
         tft_region_t pending = {0};
         bool have_pending = false;
@@ -1110,25 +1468,20 @@ static esp_err_t tft_write_framebuffer(void)
                 ? TFT_HEIGHT - 1U : top + TFT_DIRTY_STRIP_ROWS - 1U;
             tft_region_t changed;
             if (!tft_find_changed_region(top, bottom, &changed)) { continue; }
-            if (have_pending && pending.bottom + 1U == changed.top &&
-                pending.left == changed.left && pending.right == changed.right) {
-                pending.bottom = changed.bottom;
-            } else {
-                if (have_pending) {
-                    const esp_err_t error = tft_write_region(&pending);
-                    if (error != ESP_OK) { return error; }
-                }
-                pending = changed;
-                have_pending = true;
+            if (have_pending && tft_merge_regions(&pending, &changed)) { continue; }
+            if (have_pending) {
+                error = tft_write_region(&pending);
+                if (error != ESP_OK) { goto finished; }
             }
+            pending = changed;
+            have_pending = true;
         }
-        if (have_pending) {
-            const esp_err_t error = tft_write_region(&pending);
-            if (error != ESP_OK) { return error; }
-        }
+        if (have_pending) { error = tft_write_region(&pending); }
     }
-    s_tft_frame_valid = true;
-    return ESP_OK;
+finished:
+    s_tft_frame_valid = error == ESP_OK;
+    s_tft_last_flush_us = (uint32_t)(esp_timer_get_time() - started_us);
+    return error;
 }
 
 /*
@@ -2594,7 +2947,7 @@ static esp_err_t tft_show_njupt_logo(void)
 _Static_assert(SPLASH_WIDTH == TFT_WIDTH && SPLASH_HEIGHT == TFT_HEIGHT,
                "Splash dimensions must match the LCD framebuffer");
 _Static_assert(SPLASH_FRAME_COUNT > 0U, "Splash needs a final frame");
-_Static_assert(NJUPT_SPLASH_MIN_FRAME_MS >= 100U, "Splash must not exceed 10 fps");
+_Static_assert(NJUPT_SPLASH_MIN_FRAME_MS >= 33U, "Splash must not exceed about 30 fps");
 
 /**
  * 把一幅独立压缩动画帧展开到已有的主机序 RGB565 帧缓冲，不直接写屏。
@@ -2654,13 +3007,13 @@ static void tft_splash_wait_until(int64_t deadline_us)
 
 /**
  * 开机只播放一次桌面文件中的描边/渐显动画，然后由 app_main 显示“加载中”。
- * 源 GIF 的动态帧间隔为 100 ms，最多 10 fps；开头黑场 300 ms，最终校徽停留
+ * 原 SVG 重新采样为 107 帧，动态间隔 33/34 ms（约 30 fps）；开头黑场 300 ms，最终校徽停留
  * 500 ms，总时间约 4.3 s。资源已统一裁去外围留白，将校徽居中放大 2 倍，
  * 保留蓝色及最终白色区域的镂空；运行时直接解码，放大不增加每帧缩放计算。
- * 20 MHz、RGB565 整屏仅线缆传输就约需 46 ms，因此不按面板标称扫描帧率发帧。
+ * 40 MHz、RGB565 整屏仅像素传输约 23 ms；资源保留原色表，最终帧逐像素保持原样。
  * 解码后调用已有变化区域刷新；第一帧整屏清黑并同步缓存，再开启背光。
- * 绝对时间轴包含解码/SPI 开销，不把“传输耗时 + 100 ms”累积成慢动作。
- * 显示落后时跳过已经过期的中间帧，并限制连续提交起点至少相隔 100 ms，
+ * 绝对时间轴包含解码/SPI 开销，不把传输耗时叠加到每一帧间隔上。
+ * 显示落后时跳过已经过期的中间帧，并限制连续提交起点至少相隔 33 ms，
  * 避免补帧形成突发写屏；最终帧始终显示，且从提交成功后开始计算最终停留。
  * 不创建任务、不访问 SD/音频；传输或解码错误立即返回，由 app_main 回退静态校标。
  * 日志统计的是固件提交帧和耗时，不能代替屏幕实际扫描帧率的硬件测量。
@@ -2725,26 +3078,7 @@ static esp_err_t tft_play_njupt_splash(void)
     return ESP_OK;
 }
 
-/**
- * 在小型 5×7 字库中线性查找一个单字节字符的 7 行点阵。
- * @return 指向常量字形数据的指针；未知字符返回空格字形，不分配内存。
- * 不支持通用 UTF-8 中文，因此歌曲显示名需转换为 ASCII，“加载中”另用专用点阵。
- */
-static const uint8_t *font_rows(char character)
-{
-    for (size_t index = 0U; index < ARRAY_SIZE(FONT_5X7); ++index) {
-        if (FONT_5X7[index].character == character) { return FONT_5X7[index].rows; }
-    }
-    return FONT_5X7[0].rows;
-}
-
-/**
- * 在内存帧缓冲中填充 RGB565 矩形，不立即发送到屏幕。
- * @param x/y 左上角可为负；width/height 是像素数量，color 为主机序 RGB565。
- * 四边裁剪到屏幕范围；裁剪后空矩形或缓冲未分配时直接返回。
- * 使用一维索引 row × TFT_WIDTH + column，对每个可见像素写同一颜色。
- * 绘图完成后由调用方统一 tft_write_framebuffer，减少 SPI 事务。
- */
+/* 以下两个小工具由新 UI 共享；GPIO 扫描及单键策略保持原实现。 */
 static void tft_fill_rect(int x, int y, int width, int height, uint16_t color)
 {
     if (x < 0) { width += x; x = 0; }
@@ -2759,133 +3093,6 @@ static void tft_fill_rect(int x, int y, int width, int height, uint16_t color)
     }
 }
 
-/**
- * 用 5×7 字库向帧缓冲绘制一行 ASCII 文字，空白位保持原背景。
- * @param x/y 起始像素坐标；scale 为正整数放大倍数，color 为前景 RGB565。
- * 每个点扩大为 scale×scale 矩形；每字符前进 6×scale，含 1 列字符间隔。
- * 从点阵 bit4 到 bit0 依次绘制左到右；越界部分由 tft_fill_rect 裁剪。
- * NULL 文字或 scale=0 直接返回；不会自动换行或发送屏幕。
- */
-static void tft_draw_text(int x, int y, const char *text, uint8_t scale, uint16_t color)
-{
-    if (text == NULL || scale == 0U) { return; }
-    while (*text != '\0') {
-        const uint8_t *rows = font_rows(*text++);
-        for (uint8_t row = 0U; row < 7U; ++row) {
-            for (uint8_t column = 0U; column < 5U; ++column) {
-                if ((rows[row] & (1U << (4U - column))) != 0U) {
-                    tft_fill_rect(x + column * scale, y + row * scale,
-                                  scale, scale, color);
-                }
-            }
-        }
-        x += 6 * scale;
-    }
-}
-
-/**
- * 按字库固定字宽计算横向居中位置，再调用 tft_draw_text。
- * @param text 必须是非 NULL、NUL 结尾的 ASCII 字符串；y 为顶边坐标。
- * 宽度 strlen(text)×6×scale 减去末尾的字符间隔，不包含中文 UTF-8 排版。
- * 文字超过屏幕宽度会得到负起点，绘制函数会裁剪两端。
- */
-static void tft_draw_centered(int y, const char *text, uint8_t scale, uint16_t color)
-{
-    const int width = (int)strlen(text) * 6 * scale - scale;
-    tft_draw_text(((int)TFT_WIDTH - width) / 2, y, text, scale, color);
-}
-
-/* “加载中”三个 16x16 点阵字，避免启动阶段依赖完整中文字库。 */
-static const uint16_t LOADING_GLYPHS[3][16] = {
-    {0x0800,0x0800,0x0800,0x7F7C,0x0944,0x0944,0x0944,0x1944,
-     0x1144,0x1144,0x1144,0x317C,0x2344,0x6644,0x0000,0x0000},
-    {0x0848,0x7F4C,0x4840,0x0840,0x7FFE,0x0840,0x7F6C,0x1028,
-     0x2428,0x3F38,0x0430,0x1F30,0x747A,0x04CE,0x0404,0x0000},
-    {0x0180,0x0180,0x0180,0x3FFC,0x2184,0x2184,0x2184,0x2184,
-     0x3FFC,0x2184,0x0180,0x0180,0x0180,0x0180,0x0180,0x0000},
-};
-
-/**
- * 居中绘制专用的“加载中”三个 16×16 中文点阵。
- * 每行 uint16 的 bit15 是最左列；字内按 scale 放大，字间间距固定 4 像素。
- * @param y 文字顶部，scale 放大倍数，color 前景色；仅修改帧缓冲。
- * 只包含这三个汉字，不需要加载完整中文字库或依赖 SD 文件。
- */
-static void tft_draw_loading_glyphs(int y, uint8_t scale, uint16_t color)
-{
-    const int glyph_width = 16 * scale;
-    const int gap = 4;
-    const int total_width = glyph_width * 3 + gap * 2;
-    const int start_x = ((int)TFT_WIDTH - total_width) / 2;
-    for (int glyph = 0; glyph < 3; ++glyph) {
-        for (int row = 0; row < 16; ++row) {
-            for (int column = 0; column < 16; ++column) {
-                if ((LOADING_GLYPHS[glyph][row] & (1U << (15 - column))) != 0U) {
-                    tft_fill_rect(start_x + glyph * (glyph_width + gap) + column * scale,
-                                  y + row * scale, scale, scale, color);
-                }
-            }
-        }
-    }
-}
-
-/* 校标仅由 app_main 显示一次。SD 初始化及每次重试只刷新此加载页。 */
-/**
- * 绘制并提交 SD 加载页，供初始挂载和运行期重挂载复用。
- * @param attempt 0 显示 PLEASE WAIT；正数显示当前尝试/总尝试及进度条。
- * @param total_attempts 重试次数上限，进度条表示尝试序号而非真实时间百分比。
- * 启动挂载时直接调用；运行期通过显示队列由 display_task 调用。
- * 此函数不会重新绘制校标；设置/电子琴视图的优先级在 tft_draw_status 决定。
- */
-static esp_err_t tft_show_loading(uint32_t attempt, uint32_t total_attempts)
-{
-    if (!s_tft_ready || s_tft_framebuffer == NULL) { return ESP_ERR_INVALID_STATE; }
-    tft_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, COLOR_BACKGROUND);
-    tft_fill_rect(12, 35, 216, 170, COLOR_PANEL);
-    tft_draw_loading_glyphs(62, 2U, COLOR_WHITE);
-    tft_draw_centered(108, "MICROSD CARD", 2U, COLOR_ACCENT);
-
-    char progress[24];
-    if (attempt == 0U) {
-        (void)snprintf(progress, sizeof(progress), "PLEASE WAIT");
-    } else {
-        (void)snprintf(progress, sizeof(progress), "ATTEMPT %u / %u",
-                       (unsigned)attempt, (unsigned)total_attempts);
-    }
-    tft_draw_centered(148, progress, 1U, COLOR_MUTED);
-    tft_fill_rect(30, 178, 180, 8, COLOR_MUTED);
-    if (attempt > 0U && total_attempts > 0U) {
-        const int width = (int)(180U * attempt / total_attempts);
-        tft_fill_rect(30, 178, width, 8, COLOR_ACCENT);
-    }
-    return tft_write_framebuffer();
-}
-
-/* 音乐来自 SD 卡；无文件时显示可操作的空状态。 */
-/**
- * 向歌曲区域绘制 ASCII 歌名或没有 WAV 的空状态。
- * @param song_index 当前曲目索引，仅在列表非空时查找名称。
- * 缺歌时提示加 WAV 并重启：播放列表仅启动扫描，运行期不做自动热插入扫描。
- * 只写帧缓冲，外层状态页面负责最后一次差分区域提交。
- */
-static void tft_draw_song_title(uint8_t song_index)
-{
-    if (s_sd_wav_count == 0U) {
-        tft_draw_centered(82, "NO WAV FILES", 2U, COLOR_WHITE);
-        tft_draw_centered(119, "ADD WAV TO SD AND RESTART", 1U, COLOR_MUTED);
-        return;
-    }
-    tft_draw_centered(82, "SD CARD WAV", 2U, COLOR_WHITE);
-    tft_draw_centered(119, player_track_name(song_index), 1U, COLOR_MUTED);
-}
-
-/**
- * 把 16 位按键位图转换成唯一按键索引。
- * @param keys bit(row×4+column)=1 表示该键按下。
- * @return 仅一个 bit 为 1 时返回 0~15；无键或多键返回 -1。
- * n & (n-1) 可判断是否有多于一个置位；单音策略也用于设置键和 RGB。
- * 该策略拒绝所有多键输入，避免无隔离二极管矩阵的鬼键被当成音符。
- */
 static int piano_key_index(uint16_t keys)
 {
     /* 普通无二极管矩阵采用单音策略：多键时静音，不产生鬼键音符。 */
@@ -2896,163 +3103,38 @@ static int piano_key_index(uint16_t keys)
     return -1;
 }
 
-/**
- * 根据一份状态快照绘制 4×4 琴键、状态、音量和 BOOT 操作提示。
- * 唯一有效键且未暂停/监听时才高亮；多键或无键显示等待按键。
- * 优先提示键盘接线不可用，再提示监听/暂停/当前音名。
- * 使用快照，不反向修改按键、模式或播放器状态；完成后差分提交变化区域。
- * @param update 已校验的非 NULL 快照，由 tft_draw_status 传入。
- */
-static void tft_draw_piano(const display_update_t *update)
-{
-    const int active = piano_key_index(update->piano_keys);
-    tft_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, COLOR_BACKGROUND);
-    tft_fill_rect(0, 0, TFT_WIDTH, 6, COLOR_NJUPT_BLUE);
-    tft_draw_centered(18, "ELECTRIC PIANO", 2U, COLOR_WHITE);
-    const char *state = !update->keypad_ready ? "CHECK KEYPAD WIRING" :
-        (update->listening ? "LISTENING" : (update->paused ? "PAUSED" :
-         (active >= 0 ? PIANO_NOTE_NAMES[active] : "PRESS A KEY")));
-    tft_draw_centered(43, state, 1U, COLOR_ACCENT);
-    for (unsigned key = 0U; key < 16U; ++key) {
-        const int x = 14 + (int)(key % 4U) * 55;
-        const int y = 65 + (int)(key / 4U) * 27;
-        const bool pressed = (int)key == active && !update->paused && !update->listening;
-        tft_fill_rect(x, y, 47, 23, pressed ? COLOR_ACCENT : COLOR_PANEL);
-        tft_draw_text(x + 12, y + 8, PIANO_NOTE_NAMES[key], 1U, COLOR_WHITE);
-    }
-    char volume[24];
-    (void)snprintf(volume, sizeof(volume), "VOLUME %u%%", (unsigned)update->volume_percent);
-    tft_draw_centered(180, volume, 2U, COLOR_WHITE);
-    tft_draw_centered(210, "HOLD BOOT: SETTINGS", 1U, COLOR_MUTED);
-    tft_draw_centered(231, update->voice_ready ? "SAY NI HAO XIAO ZHI" : "VOICE OFF",
-                      1U, COLOR_MUTED);
-    const esp_err_t error = tft_write_framebuffer();
-    if (error != ESP_OK) { ESP_LOGW(TAG, "Piano TFT refresh: %s", esp_err_to_name(error)); }
-}
-
-/**
- * 绘制音乐/电子琴两项独立音量、选中标记和矩阵第一行操作说明。
- * 进度条按百分比映射到 190 像素；这里只呈现快照，音量修改在播放器任务内。
- * 设置视图不改变模式：音乐可继续播放，电子琴生成路径因 settings_open 静音。
- * 完成后差分提交变化区域；失败记录警告并由显示任务定时重试。
- * @param update 非 NULL 的画面状态快照。
- */
-static void tft_draw_settings(const display_update_t *update)
-{
-    tft_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, COLOR_BACKGROUND);
-    tft_fill_rect(0, 0, TFT_WIDTH, 6, COLOR_NJUPT_BLUE);
-    tft_draw_centered(18, "VOLUME SETTINGS", 2U, COLOR_WHITE);
-    tft_draw_centered(43, "RANGE 0 - 100%", 1U, COLOR_MUTED);
-    for (unsigned item = 0U; item < 2U; ++item) {
-        const int y = 61 + (int)item * 57;
-        const bool selected = update->settings_target == (player_mode_t)item;
-        const unsigned volume = item == 0U ? update->music_volume_percent : update->piano_volume_percent;
-        char label[24];
-        (void)snprintf(label, sizeof(label), "%s %u%%", item == 0U ? "MUSIC" : "PIANO", volume);
-        tft_fill_rect(12, y, 216, 51, COLOR_PANEL);
-        tft_fill_rect(12, y, 4, 51, selected ? COLOR_ACCENT : COLOR_MUTED);
-        tft_draw_text(25, y + 8, selected ? ">" : " ", 2U, COLOR_ACCENT);
-        tft_draw_text(43, y + 8, label, 2U, selected ? COLOR_WHITE : COLOR_MUTED);
-        tft_fill_rect(25, y + 34, 190, 7, COLOR_BACKGROUND);
-        tft_fill_rect(25, y + 34, (int)(volume * 190U / 100U), 7,
-                      selected ? COLOR_ACCENT : COLOR_MUTED);
-    }
-    tft_draw_centered(185, "R1: MUSIC PIANO - +", 1U, COLOR_WHITE);
-    tft_draw_centered(202, update->keypad_ready ? "HOLD -/+ TO REPEAT" : "CHECK KEYPAD WIRING",
-                      1U, COLOR_MUTED);
-    tft_draw_centered(222, "SHORT BOOT: EXIT", 1U, COLOR_ACCENT);
-    const esp_err_t error = tft_write_framebuffer();
-    if (error != ESP_OK) { ESP_LOGW(TAG, "Settings TFT refresh: %s", esp_err_to_name(error)); }
-}
-
-/**
- * 显示任务的统一画面入口，按当前快照选择视图并刷新。
- * 优先级：设置页面 > 电子琴页面 > SD 加载页 > 音乐页面。
- * 音乐页包含监听/启动/暂停/播放状态、歌曲序号、歌名与当前模式音量。
- * 屏幕不可用、帧缓冲未分配或 update 为 NULL 时直接返回。
- * 歌曲目录在启动后不再改变，因此可按快照索引读取常量生命周期的名称。
- */
-static void tft_draw_status(const display_update_t *update)
-{
-    if (!s_tft_ready || s_tft_framebuffer == NULL || update == NULL) {
-        return;
-    }
-    /* 状态优先级决定恢复时仍能查看设置或切到电子琴；加载标志不强制覆盖它们。 */
-    if (update->settings_open) { tft_draw_settings(update); return; }
-    if (update->mode == PLAYER_MODE_PIANO) { tft_draw_piano(update); return; }
-    if (update->sd_loading) {
-        const esp_err_t error = tft_show_loading(update->sd_mount_attempt, SD_MOUNT_RETRY_COUNT);
-        if (error != ESP_OK) { ESP_LOGW(TAG, "SD recovery TFT: %s", esp_err_to_name(error)); }
-        return;
-    }
-    const uint8_t song_index = update->song_index;
-    for (size_t index = 0U; index < TFT_WIDTH * TFT_HEIGHT; ++index) {
-        s_tft_framebuffer[index] = COLOR_BACKGROUND;
-    }
-
-    tft_fill_rect(0, 0, TFT_WIDTH, 6, COLOR_NJUPT_BLUE);
-    tft_draw_centered(18, "NOW PLAYING", 2U, COLOR_WHITE);
-    const char *state = update->listening ? "LISTENING" :
-                        (s_sd_wav_count == 0U && update->player_started ? "NO MUSIC" :
-                        (!update->player_started ? "STARTING" :
-                         (update->paused ? "PAUSED" : "PLAYING")));
-    tft_draw_centered(43, state, 1U,
-                      update->listening ? COLOR_ACCENT : COLOR_MUTED);
-
-    tft_fill_rect(12, 62, 216, 85, COLOR_PANEL);
-    tft_fill_rect(12, 62, 4, 85, COLOR_NJUPT_BLUE);
-    tft_draw_song_title(song_index);
-
-    char track_text[32];
-    if (s_sd_wav_count > 0U) {
-        (void)snprintf(track_text, sizeof(track_text), "TRACK %u/%u  WAV",
-                       (unsigned)song_index + 1U, (unsigned)s_sd_wav_count);
-    } else {
-        (void)snprintf(track_text, sizeof(track_text), "TRACK 0/0  WAV");
-    }
-    tft_draw_centered(157, track_text, 1U, COLOR_MUTED);
-
-    char volume_text[16];
-    (void)snprintf(volume_text, sizeof(volume_text), "VOLUME %u%%",
-                   (unsigned)update->volume_percent);
-    tft_draw_centered(180, volume_text, 2U, COLOR_WHITE);
-
-    tft_fill_rect(19, 210, 202, 14, COLOR_MUTED);
-    tft_fill_rect(21, 212, 198, 10, COLOR_BACKGROUND);
-    const int volume_width = (int)((update->volume_percent * 198U) / 100U);
-    tft_fill_rect(21, 212, volume_width, 10,
-                  update->volume_percent == 0U ? COLOR_MUTED : COLOR_ACCENT);
-
-    tft_draw_centered(231, "HOLD BOOT: SETTINGS",
-                      1U, COLOR_MUTED);
-
-    const esp_err_t error = tft_write_framebuffer();
-    if (error != ESP_OK) {
-        ESP_LOGW(TAG, "TFT refresh failed: %s", esp_err_to_name(error));
-    }
-}
+#include "player_ui.inc"
 
 /**
  * 判断两份业务快照是否相同，跳过重复命令、重复状态导致的整幅界面重绘。
  * 逐字段比较而非 memcmp，避免 C 结构体 padding 的不确定字节触发无意义刷新。
- * 播放目录在启动后保持不变，所以歌曲索引足以表示标题内容的变化。
+ * 播放目录在启动后保持不变，歌曲索引表示标题变化；时间/进度字段也参与比较。
+ * UI 动画未结束时即便快照相同仍继续绘制有限帧，结束后恢复跳过重复状态。
  */
 static bool display_updates_equal(const display_update_t *a, const display_update_t *b)
 {
     return a->song_index == b->song_index && a->volume_percent == b->volume_percent &&
         a->paused == b->paused && a->listening == b->listening &&
         a->player_started == b->player_started && a->voice_ready == b->voice_ready &&
-        a->mode == b->mode && a->piano_keys == b->piano_keys &&
+        a->mode == b->mode && a->home_selection == b->home_selection &&
+        a->track_count == b->track_count && strcmp(a->track_path, b->track_path) == 0 &&
+        a->wifi_status == b->wifi_status && a->wifi_sta_ip == b->wifi_sta_ip &&
+        a->transfer_state == b->transfer_state && a->transfer_bytes == b->transfer_bytes &&
+        a->transfer_total == b->transfer_total && a->piano_keys == b->piano_keys &&
         a->keypad_ready == b->keypad_ready && a->settings_open == b->settings_open &&
         a->settings_target == b->settings_target &&
         a->music_volume_percent == b->music_volume_percent &&
         a->piano_volume_percent == b->piano_volume_percent &&
-        a->sd_loading == b->sd_loading && a->sd_mount_attempt == b->sd_mount_attempt;
+        a->sd_loading == b->sd_loading && a->sd_mount_attempt == b->sd_mount_attempt &&
+        a->track_elapsed_seconds == b->track_elapsed_seconds &&
+        a->track_duration_seconds == b->track_duration_seconds &&
+        a->track_progress_permille == b->track_progress_permille;
 }
 
 /**
- * 常驻显示任务：保持最新快照，按最多约 50 次/秒合并快速状态变化。
- * 未变化的快照不重绘，变化画面由差分提交只发送局部像素；静态界面不空刷。
+ * 常驻显示任务：保持最新快照，以 17 ms 最小间隔合并快速状态变化。
+ * 未变化且无动画的快照不重绘；有限 UI 动画结束后停止定时唤醒。
+ * 变化画面仍由现有差分提交只发送局部像素；歌曲进度真实前进时每秒更新一次。
  * 帧间等待后再次取最新状态，避免队列里的旧按键画面占用下一个刷新周期。
  * 失败后保留最新快照并间隔重试，直到整屏修复成功；新消息可替换待重试画面。
  * 显示优先级继续低于音频和语音，SPI 仍用中断式等待，不改变实时任务的分配。
@@ -3070,12 +3152,16 @@ static void display_task(void *argument)
     const TickType_t interval = pdMS_TO_TICKS(DISPLAY_MIN_FRAME_MS) > 0
         ? pdMS_TO_TICKS(DISPLAY_MIN_FRAME_MS) : 1;
     int64_t stats_since_us = esp_timer_get_time();
-    uint64_t stats_total_us = 0U;
+    uint64_t stats_total_us = 0U, stats_flush_us = 0U, stats_regions = 0U;
     uint32_t stats_frames = 0U, stats_pixels = 0U, stats_max_us = 0U;
     while (true) {
-        const TickType_t wait = retry_pending ? pdMS_TO_TICKS(DISPLAY_RETRY_MS) : portMAX_DELAY;
-        if (xQueueReceive(s_display_updates, &update, wait) != pdTRUE && !retry_pending) { continue; }
-        if (have_rendered && s_tft_frame_valid && display_updates_equal(&update, &rendered)) {
+        /* 有限动画按原刷新节奏推进；动画结束且无状态变化后仍永久阻塞，不空刷。 */
+        const TickType_t wait = retry_pending ? pdMS_TO_TICKS(DISPLAY_RETRY_MS) :
+            (ui_animation_pending() ? interval : portMAX_DELAY);
+        if (xQueueReceive(s_display_updates, &update, wait) != pdTRUE &&
+            !retry_pending && !ui_animation_pending()) { continue; }
+        if (have_rendered && s_tft_frame_valid && !ui_animation_pending() &&
+            display_updates_equal(&update, &rendered)) {
             retry_pending = false;
             continue;
         }
@@ -3083,7 +3169,8 @@ static void display_task(void *argument)
         if (have_started && elapsed < interval) { vTaskDelay(interval - elapsed); }
         /* 显示队列长度为 1，这里只保留帧间等待期间收到的最新快照。 */
         while (xQueueReceive(s_display_updates, &update, 0) == pdTRUE) { }
-        if (have_rendered && s_tft_frame_valid && display_updates_equal(&update, &rendered)) {
+        if (have_rendered && s_tft_frame_valid && !ui_animation_pending() &&
+            display_updates_equal(&update, &rendered)) {
             retry_pending = false;
             continue;
         }
@@ -3100,17 +3187,22 @@ static void display_task(void *argument)
         const int64_t now_us = esp_timer_get_time();
         const uint32_t duration_us = (uint32_t)(now_us - start_us);
         stats_total_us += duration_us;
+        stats_flush_us += s_tft_last_flush_us;
+        stats_regions += s_tft_last_region_count;
         stats_pixels += s_tft_last_transfer_pixels;
         ++stats_frames;
         if (duration_us > stats_max_us) { stats_max_us = duration_us; }
         if (now_us - stats_since_us >= DISPLAY_STATS_INTERVAL_US) {
-            ESP_LOGI(TAG, "TFT refresh: updates=%lu avg=%llu us max=%lu us pixels/update=%lu",
+            ESP_LOGI(TAG, "TFT refresh: updates=%lu avg=%llu us max=%lu us draw=%llu us flush=%llu us regions/update=%llu pixels/update=%lu",
                      (unsigned long)stats_frames,
                      (unsigned long long)(stats_total_us / stats_frames),
                      (unsigned long)stats_max_us,
+                     (unsigned long long)((stats_total_us - stats_flush_us) / stats_frames),
+                     (unsigned long long)(stats_flush_us / stats_frames),
+                     (unsigned long long)(stats_regions / stats_frames),
                      (unsigned long)(stats_pixels / stats_frames));
             stats_since_us = now_us;
-            stats_total_us = 0U;
+            stats_total_us = stats_flush_us = stats_regions = 0U;
             stats_frames = stats_pixels = stats_max_us = 0U;
         }
     }
@@ -3119,7 +3211,7 @@ static void display_task(void *argument)
 /**
  * 初始化 ST7789 GPIO、SPI2、主帧/差分副本/DMA 发送缓冲及显示控制器。
  * 先关闭背光，再创建无 CS、mode 3 的发送设备；不配置屏幕读回通道。
- * 小流缓冲必须位于内部 DMA RAM；主帧 115200 字节优先用 PSRAM，失败再回退堆。
+ * 两块流缓冲合计 15360 字节内部 DMA RAM，分配失败退回单块；主帧优先用 PSRAM。
  * 额外 115200 字节差分副本仅尝试 PSRAM，分配失败则回退整屏发送。
  * 硬复位后按顺序软件复位、退出睡眠、设置 RGB565/MADCTL、反显、正常和开显示。
  * 这些命令间等待屏幕规定的初始化时间；只有最终成功才置 s_tft_ready。
@@ -3156,14 +3248,21 @@ static esp_err_t tft_init(void)
         .clock_speed_hz = TFT_SPI_CLOCK_HZ,
         .mode = 3, /* 与已验证校标程序一致，适配无 CS 模块。 */
         .spics_io_num = -1,
-        .queue_size = 1,
+        .queue_size = TFT_STREAM_BUFFER_COUNT,
     };
     error = spi_bus_add_device(TFT_SPI_HOST, &device_config, &s_tft);
     if (error != ESP_OK) { return error; }
 
     /* SPI DMA 只直接发送小型内部缓冲；PSRAM 主缓冲由 CPU 按块复制到这里。 */
-    s_tft_stream_buffer = heap_caps_malloc(TFT_STREAM_PIXELS * sizeof(uint16_t),
+    s_tft_buffer_count = TFT_STREAM_BUFFER_COUNT;
+    s_tft_stream_buffer = heap_caps_malloc(TFT_STREAM_PIXELS * TFT_STREAM_BUFFER_COUNT * sizeof(uint16_t),
                                            MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (s_tft_stream_buffer == NULL) {
+        s_tft_buffer_count = 1U;
+        s_tft_stream_buffer = heap_caps_malloc(TFT_STREAM_PIXELS * sizeof(uint16_t),
+                                               MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        ESP_LOGW(TAG, "TFT DMA: falling back to one buffer");
+    }
     s_tft_framebuffer = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * sizeof(uint16_t),
                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (s_tft_framebuffer == NULL) {
@@ -3177,10 +3276,10 @@ static esp_err_t tft_init(void)
     s_tft_previous_frame = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * sizeof(uint16_t),
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_tft_frame_valid = false; /* 副本尚未初始化，首帧必须完整发送后才允许比较。 */
-    ESP_LOGI(TAG, "TFT renderer: SPI=%u MHz, dirty rectangles=%s, update limit=%u Hz",
-             (unsigned)(TFT_SPI_CLOCK_HZ / 1000000U),
+    ESP_LOGI(TAG, "TFT renderer: SPI=%u MHz, DMA buffers=%u, dirty rectangles=%s, update interval=%u ms",
+             (unsigned)(TFT_SPI_CLOCK_HZ / 1000000U), (unsigned)s_tft_buffer_count,
              s_tft_previous_frame != NULL ? "ON" : "OFF (no PSRAM cache)",
-             (unsigned)(1000U / DISPLAY_MIN_FRAME_MS));
+             (unsigned)DISPLAY_MIN_FRAME_MS);
 
     gpio_set_level(TFT_RST_GPIO, 0);
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -3647,13 +3746,8 @@ static esp_err_t sd_card_init_and_scan_impl(bool recovering)
         if (recovering) {
             /* 播放器将进度送到显示队列，运行期只有 TFT 任务访问帧缓冲区。 */
             atomic_store_explicit(&s_sd_mount_attempt, attempt, memory_order_relaxed);
-        } else if (s_tft_ready) {
-            const esp_err_t display_error =
-                tft_show_loading(attempt, SD_MOUNT_RETRY_COUNT);
-            if (display_error != ESP_OK) {
-                ESP_LOGW(TAG, "Loading screen refresh failed: %s",
-                         esp_err_to_name(display_error));
-            }
+        } else {
+            atomic_store_explicit(&s_sd_mount_attempt, attempt, memory_order_relaxed);
         }
         ESP_LOGI(TAG,
                  "Mounting microSD attempt %u/%u: MOSI=%d SCK=%d MISO=%d CS=%d, probe=%u kHz work=%u kHz",
@@ -3704,7 +3798,6 @@ static esp_err_t sd_card_init_and_scan_impl(bool recovering)
              (unsigned)summary.read_failures,
              summary.truncated ? " (limited)" : "");
     if (s_sd_wav_count > 0U) {
-        s_song_index = 0U;
         ESP_LOGI(TAG, "%u WAV track(s) ready; SD playback has priority",
                  (unsigned)s_sd_wav_count);
     } else {
@@ -3734,34 +3827,6 @@ static void sd_card_init_and_scan_task(void *argument)
     vTaskDelete(NULL);
 }
 
-/* app_main 的默认栈较小，而递归扫描长文件名目录需要数 KB 临时路径空间。
- * 使用一次性的独立任务承载扫描，完成后释放其栈，不占用播放阶段的内存。
- */
-/**
- * 启动时同步等待一次大栈 SD 扫描任务完成，避免 app_main 栈被递归路径占满。
- * 上下文的 recovering 默认初始化为 false，工作任务执行首次挂载和目录扫描。
- * 任务创建失败返回 NO_MEM；成功则用 ulTaskNotifyTake 阻塞到明确完成。
- * 此处尚未启动音频，因此允许直接等待；运行期改用 sd_card_recover 的零样本循环。
- * @return 工作任务的挂载/扫描结果。
- */
-static esp_err_t sd_card_init_and_scan(void)
-{
-    sd_scan_task_context_t context = {
-        .caller = xTaskGetCurrentTaskHandle(),
-        .result = ESP_FAIL,
-    };
-    const BaseType_t created = xTaskCreatePinnedToCore(
-        sd_card_init_and_scan_task, "sd_scan", SD_SCAN_TASK_STACK_SIZE,
-        &context, SD_SCAN_TASK_PRIORITY, NULL, SD_SCAN_TASK_CORE);
-    if (created != pdPASS) {
-        ESP_LOGE(TAG, "Cannot create SD scan task with %u-byte stack",
-                 (unsigned)SD_SCAN_TASK_STACK_SIZE);
-        return ESP_ERR_NO_MEM;
-    }
-    /* 必须收到明确完成通知后才能返回：context 在本函数栈上，工作任务仍引用它。 */
-    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    return context.result;
-}
 
 /* --------------------------- 矩阵键盘和 BOOT --------------------------- */
 
@@ -3853,31 +3918,12 @@ static esp_err_t button_init(void)
     return error;
 }
 
-/* 设置是独立视图，不改变播放模式；只有播放器任务修改状态。 */
-/**
- * 在播放器任务内打开/关闭设置视图，不切换实际播放模式。
- * 打开时默认选择当前模式的音量；清空琴键并要求全部松开后再接收新键。
- * 清除连发键记忆，避免从演奏转入设置时误改音量。
- * 发布画面快照；音乐继续播放，电子琴路径看到 settings_open 后输出静音。
- */
-static void settings_toggle(void)
-{
-    s_settings_open = !s_settings_open;
-    if (s_settings_open) { s_settings_target = s_mode; }
-    s_piano_keys = 0U;
-    s_keypad_wait_release = true;
-    s_settings_last_key = -1;
-    display_request_update();
-    ESP_LOGI(TAG, "Settings %s: MUSIC=%u%% PIANO=%u%%", s_settings_open ? "OPEN" : "CLOSED",
-             (unsigned)s_volume_percent, (unsigned)s_piano_volume_percent);
-}
-
 /**
  * 处理一次 BOOT 原始电平，按稳定时间区分机械抖动、短按和长按。
  * @param raw 1 松开/0 按下；now 为 esp_timer_get_time 返回的微秒时间。
  * 先等待 50 ms 稳定，再在首次按下记录有效性和起始时间。
- * 有效按住达到 1 秒切换设置，并标记长按已处理；松开时不再产生短按。
- * 普通短按在松开时触发：设置打开则退出设置，否则切换音乐/电子琴。
+ * 有效按住达到 1 秒进入功能/返回开始页，并标记长按已处理；松开不再触发短按。
+ * 普通短按在松开时触发：开始页移动选择边框，音乐页切到下一首。
  * 300 ms 操作保护间隔限制连续触发；启动时按住的那次不作为有效按压。
  */
 static void button_update(int raw, int64_t now)
@@ -3896,17 +3942,16 @@ static void button_update(int raw, int64_t now)
             s_button_pressed_us = s_button_changed_us;
         }
         if (s_button_press_valid && !s_button_long_handled &&
-            now - s_button_pressed_us >= BOOT_SETTINGS_HOLD_US) {
+            now - s_button_pressed_us >= BOOT_ENTER_HOLD_US) {
             s_button_long_handled = true;
             s_boot_next_switch_us = now + BOOT_SWITCH_GUARD_US;
-            settings_toggle();
+            player_apply_command(PLAYER_BOOT_LONG);
         }
     } else if (s_button_latched) {
         s_button_latched = false;
         if (s_button_press_valid && !s_button_long_handled) {
             s_boot_next_switch_us = now + BOOT_SWITCH_GUARD_US;
-            if (s_settings_open) { settings_toggle(); }
-            else { player_apply_command(PLAYER_TOGGLE_MODE); }
+            player_apply_command(PLAYER_BOOT_SHORT);
         }
         s_button_press_valid = false;
     }
@@ -4153,6 +4198,12 @@ static esp_err_t audio_write_buffer(size_t frame_count)
         position += written;
         remaining -= written;
     }
+    /* 每批输出后读取测距快照；测距任务不直接修改用户暂停/模式/显示状态。 */
+    const bool blocked = atomic_load_explicit(&s_ultrasonic_blocked, memory_order_relaxed);
+    if (player_apply_ultrasonic_gesture(blocked)) {
+        display_request_update();
+        ESP_LOGI(TAG, "Ultrasonic gesture: %s", s_paused ? "PAUSE" : "PLAY");
+    }
     /* 每批输出后统一处理控制，保证无曲目/暂停/恢复状态也有相同响应入口。 */
     button_poll();
     player_command_t command;
@@ -4227,6 +4278,9 @@ static esp_err_t wav_parse_header(FILE *file, wav_stream_info_t *info)
 {
     if (file == NULL || info == NULL) { return ESP_ERR_INVALID_ARG; }
     memset(info, 0, sizeof(*info));
+    if (fseek(file, 0, SEEK_END) != 0) { return ESP_FAIL; }
+    const long file_size = ftell(file);
+    if (file_size < 12 || fseek(file, 0, SEEK_SET) != 0) { return ESP_ERR_INVALID_SIZE; }
     uint8_t riff_header[12];
     if (fread(riff_header, 1U, sizeof(riff_header), file) != sizeof(riff_header) ||
         memcmp(riff_header, "RIFF", 4U) != 0 ||
@@ -4234,16 +4288,21 @@ static esp_err_t wav_parse_header(FILE *file, wav_stream_info_t *info)
         return ESP_ERR_INVALID_RESPONSE;
     }
 
+    const uint64_t riff_end = (uint64_t)read_le32(riff_header + 4U) + 8U;
+    if (riff_end < 12U || riff_end > (uint64_t)file_size) { return ESP_ERR_INVALID_SIZE; }
     bool format_found = false;
     bool data_found = false;
     for (uint32_t chunk_index = 0U; chunk_index < 128U; ++chunk_index) {
+        const long header_offset = ftell(file);
+        if (header_offset < 0 || (uint64_t)header_offset + 8U > riff_end) { break; }
         uint8_t chunk_header[8];
         if (fread(chunk_header, 1U, sizeof(chunk_header), file) != sizeof(chunk_header)) {
             break;
         }
         const uint32_t chunk_size = read_le32(chunk_header + 4U);
         const long payload_offset = ftell(file);
-        if (payload_offset < 0 || chunk_size > 0x7FFFFFFEU) {
+        if (payload_offset < 0 || chunk_size > 0x7FFFFFFEU ||
+            (uint64_t)payload_offset + chunk_size > riff_end) {
             return ESP_ERR_INVALID_SIZE;
         }
 
@@ -4261,7 +4320,14 @@ static esp_err_t wav_parse_header(FILE *file, wav_stream_info_t *info)
             info->block_align = read_le16(format_data + 12U);
             info->bits_per_sample = read_le16(format_data + 14U);
             /* WAVE_FORMAT_EXTENSIBLE 的 SubFormat GUID 起始字段保存 PCM/Float 子格式。 */
-            if (info->audio_format == 0xFFFEU && chunk_size >= 40U) {
+            if (info->audio_format == 0xFFFEU) {
+                static const uint8_t guid_tail[14] = {
+                    0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71,
+                };
+                if (chunk_size < 40U || read_le16(format_data + 16U) < 22U ||
+                    memcmp(format_data + 26U, guid_tail, sizeof(guid_tail)) != 0) {
+                    return ESP_ERR_NOT_SUPPORTED;
+                }
                 info->audio_format = read_le16(format_data + 24U);
             }
             format_found = true;
@@ -4273,8 +4339,9 @@ static esp_err_t wav_parse_header(FILE *file, wav_stream_info_t *info)
 
         if (format_found && data_found) { break; }
         /* RIFF 块长度不含 padding；奇数长度后有一字节补齐，下一个块头从偶数边界开始。 */
-        const long next_chunk = payload_offset + (long)chunk_size + (long)(chunk_size & 1U);
-        if (next_chunk < payload_offset || fseek(file, next_chunk, SEEK_SET) != 0) {
+        const uint64_t next_chunk = (uint64_t)payload_offset + chunk_size + (chunk_size & 1U);
+        if (next_chunk > riff_end || next_chunk > 0x7FFFFFFFUL ||
+            fseek(file, (long)next_chunk, SEEK_SET) != 0) {
             return ESP_FAIL;
         }
     }
@@ -4295,7 +4362,7 @@ static esp_err_t wav_parse_header(FILE *file, wav_stream_info_t *info)
     const uint16_t bytes_per_sample = (uint16_t)((info->bits_per_sample + 7U) / 8U);
     if ((!pcm_width_supported && !float_width_supported) ||
         info->block_align < info->channels * bytes_per_sample ||
-        info->block_align > 8U) {
+        info->block_align > 8U || info->data_size % info->block_align != 0U) {
         return ESP_ERR_NOT_SUPPORTED;
     }
     return fseek(file, (long)info->data_offset, SEEK_SET) == 0 ? ESP_OK : ESP_FAIL;
@@ -4405,9 +4472,13 @@ static esp_err_t play_sd_wav(const sd_wav_file_t *track)
     /* 最大支持双声道 32 位，一帧最多 8 字节，256 帧输入块最多 2048 字节。 */
     uint8_t input[AUDIO_BUFFER_FRAMES * 8U];
     uint32_t remaining = info.data_size;
+    s_track_elapsed_seconds = 0U;
+    s_track_duration_seconds = duration_seconds;
+    s_track_progress_permille = 0U;
+    display_request_update();
     while (remaining >= info.block_align && !s_switch_requested) {
-        /* 停止推进 FILE，不关闭文件；持续送零样本才能接收“继续”及 BOOT 等控制。 */
-        if (s_paused || s_listening) {
+        /* 停止推进 FILE，不关闭文件；持续送零样本才能接收“播放”及 BOOT 等控制。 */
+        if (player_is_paused() || s_listening) {
             rgb_set_output(RGB_OUTPUT_OFF);
             memset(s_audio_buffer, 0, sizeof(s_audio_buffer));
             result = audio_write_buffer(AUDIO_BUFFER_FRAMES);
@@ -4441,6 +4512,15 @@ static esp_err_t play_sd_wav(const sd_wav_file_t *track)
         result = audio_write_buffer(frame_count);
         if (result != ESP_OK) { break; }
         remaining -= (uint32_t)received;
+        const uint32_t consumed = info.data_size - remaining;
+        const uint32_t elapsed_seconds = consumed /
+            ((uint32_t)info.block_align * info.sample_rate_hz);
+        if (!s_switch_requested && (elapsed_seconds != s_track_elapsed_seconds || remaining < info.block_align)) {
+            /* 每秒或歌曲结束才发一次进度快照，避免音频每批写入都触发界面工作。 */
+            s_track_elapsed_seconds = elapsed_seconds;
+            s_track_progress_permille = (uint16_t)((uint64_t)consumed * 1000U / info.data_size);
+            display_request_update();
+        }
     }
     rgb_set_output(RGB_OUTPUT_OFF);
     if (ferror(file) != 0) {
@@ -4503,7 +4583,7 @@ static esp_err_t sd_card_recover(void)
     ESP_LOGW(TAG, "Recovering SD card: clock limit=%u kHz",
              (unsigned)s_sd_clock_limit_khz);
     sd_scan_task_context_t context = {
-        .caller = xTaskGetCurrentTaskHandle(), .result = ESP_FAIL, .recovering = true,
+        .caller = xTaskGetCurrentTaskHandle(), .result = ESP_FAIL, .recovering = s_sd_scanned,
     };
     const BaseType_t created = xTaskCreatePinnedToCore(
         sd_card_init_and_scan_task, "sd_recover", SD_SCAN_TASK_STACK_SIZE,
@@ -4524,6 +4604,7 @@ static esp_err_t sd_card_recover(void)
             vTaskDelay(pdMS_TO_TICKS(20U));
         }
     }
+    if (s_sd_mounted) { s_sd_scanned = true; }
     if (context.result == ESP_OK) {
         s_sd_recovery_requested = false;
         s_sd_loading = false;
@@ -4545,14 +4626,16 @@ typedef struct {
 /*
  * 语音命令唯一注册表：添加/修改提示词时同时维护文件开头的操作说明。
  * command 是控制消息编号，pinyin 是模型识别词，label 是日志显示词。
- * 唤醒词不在此表中，它由 WakeNet 模型 nihaoxiaozhi 提供。
- * 本表 10 条命令只在音乐模式识别；每条命令后回到等待重新唤醒的状态。
+ * 唤醒词不在此表中，它由 WakeNet 模型 nihaoxiaoxin 提供。
+ * 本表 10 类命令、12 个说法只在音乐模式识别；每条命令后重新等待唤醒。
  */
 static const speech_command_entry_t SPEECH_COMMANDS[] = {
     {PLAYER_NEXT, "xia yi shou", "下一首"},
     {PLAYER_PREVIOUS, "shang yi shou", "上一首"},
     {PLAYER_PAUSE, "zan ting", "暂停"},
-    {PLAYER_RESUME, "ji xu", "继续"},
+    {PLAYER_RESUME, "bo fang", "播放"},
+    {PLAYER_RESUME, "bo fang yin yue", "播放音乐"},
+    {PLAYER_RESUME, "hui fu bo fang", "恢复播放"},
     {PLAYER_VOLUME_UP, "zeng da yin liang", "增大音量"},
     {PLAYER_VOLUME_DOWN, "jian xiao yin liang", "减小音量"},
     {PLAYER_MUTE, "jing yin", "静音"},
@@ -4560,6 +4643,50 @@ static const speech_command_entry_t SPEECH_COMMANDS[] = {
     {PLAYER_SONG_ONE, "bo fang di yi shou", "播放第一首"},
     {PLAYER_SONG_TWO, "bo fang di er shou", "播放第二首"},
 };
+
+/* 模型用所有命令中最低的门槛产出候选，再按命令分别判断。
+ * 不从低排名候选猜命令；只检查模型的最佳结果，拒绝越界 ID、NaN 和无效概率。
+ */
+static bool speech_command_accepted(int command_id, float probability)
+{
+    if (command_id < PLAYER_NEXT || command_id > PLAYER_SONG_TWO) { return false; }
+    const float threshold = command_id == PLAYER_RESUME
+        ? VOICE_PLAY_MIN_PROBABILITY : VOICE_MIN_PROBABILITY;
+    return probability >= threshold && probability <= 1.0f;
+}
+
+typedef struct {
+    bool pending;
+    float probability;
+    uint32_t quiet_samples;
+} speech_play_candidate_t;
+
+static void speech_note_play_candidate(speech_play_candidate_t *candidate, float probability)
+{
+    if (!candidate->pending) {
+        candidate->pending = true;
+        candidate->quiet_samples = 0U;
+        candidate->probability = probability;
+    } else if (probability > candidate->probability) {
+        candidate->probability = probability;
+    }
+}
+
+/* 按实际送入模型的音频采样数等待静音，任务被抢占不能被误认为话已经说完。
+ * 重复返回同一播放候选不重启计时；连续说话清计时，长命令可先被识别并优先执行。
+ */
+static bool speech_play_candidate_ready(speech_play_candidate_t *candidate,
+                                        bool speech, uint32_t frame_samples)
+{
+    if (!candidate->pending) { return false; }
+    const uint32_t required = MIC_SAMPLE_RATE_HZ * VOICE_PLAY_SETTLE_MS / 1000U;
+    if (speech) { candidate->quiet_samples = 0U; }
+    else {
+        const uint32_t remaining = required - candidate->quiet_samples;
+        candidate->quiet_samples += frame_samples < remaining ? frame_samples : remaining;
+    }
+    return candidate->quiet_samples >= required;
+}
 
 /*
  * 语音子系统资源集中保存；启动时分配，模式切换时保留。
@@ -4777,7 +4904,8 @@ static void speech_finish_listening(void)
  * 用 fetch_with_delay 最多等 100 ms 取 AFE 结果，使暂停/超时判断有机会运行。
  * WakeNet 检测成功后先排队 LISTEN_START，关闭重复唤醒并清 MultiNet；跳过唤醒帧。
  * 命令窗口把连续完整帧送入 MultiNet；帧大小不匹配时结束窗口，不能只喂 VAD 帧。
- * 只接受最佳结果概率 >=0.65 且命令 ID 在注册范围内，随后投递命令并结束监听。
+ * 普通命令门槛 0.65，播放单独用 0.55；只检查最佳候选，并输出候选/超时诊断。
+ * 播放候选等待 400 ms 实际语音静音，避免抢先吃掉“播放第一首/第二首”。
  * 即使 AFE 没有效音频也检查墙钟超时，避免一直静音；错误日志限制为约 5 秒一次。
  * 电子琴切换清 RUN 后丢弃本地监听状态，并在安全暂停点确认后等待恢复。
  * 此任务不直接写音频、不改歌曲/音量，也不刷屏。
@@ -4789,12 +4917,20 @@ static void speech_detect_task(void *argument)
                        pdFALSE, pdTRUE, portMAX_DELAY);
     bool listening = false;
     int64_t deadline_us = 0;
+    speech_play_candidate_t play_candidate = {0};
+    unsigned audio_frames = 0U;
+    unsigned speech_frames = 0U;
+    float max_volume_dbfs = -120.0f;
+    int last_candidate_id = 0;
+    float last_candidate_probability = 0.0f;
+    int64_t last_candidate_log_us = 0;
     const int expected_samples = s_speech.mn->get_samp_chunksize(s_speech.mn_data);
     int64_t last_error_us = 0;
     while (true) {
         if (speech_wait_until_active(SPEECH_DETECT_PAUSED_BIT)) {
             listening = false;
             deadline_us = 0;
+            play_candidate = (speech_play_candidate_t){0};
         }
         afe_fetch_result_t *result = s_speech.afe->fetch_with_delay(
             s_speech.afe_data, pdMS_TO_TICKS(100));
@@ -4804,11 +4940,14 @@ static void speech_detect_task(void *argument)
             continue;
         }
 
-        /* 即使麦克风故障，命令窗口也必须在 6 秒后关闭，恢复音乐。 */
+        /* 即使麦克风故障也关闭窗口；结束监听不改变用户的播放/暂停状态。 */
         if (listening && esp_timer_get_time() >= deadline_us) {
+            ESP_LOGW(TAG, "Voice timeout: frames=%u speech=%u peak=%.1f dBFS last_id=%d confidence=%.2f pending_play=%d",
+                     audio_frames, speech_frames, max_volume_dbfs,
+                     last_candidate_id, last_candidate_probability, play_candidate.pending);
             listening = false;
             speech_finish_listening();
-            ESP_LOGI(TAG, "Voice command window ended; waiting for wake word");
+            continue;
         }
         if (!result || result->ret_value == ESP_FAIL || !result->data) {
             if (esp_timer_get_time() - last_error_us > 5000000) {
@@ -4824,8 +4963,14 @@ static void speech_detect_task(void *argument)
             s_speech.mn->clean(s_speech.mn_data);
             s_speech.afe->disable_wakenet(s_speech.afe_data);
             listening = true;
+            play_candidate = (speech_play_candidate_t){0};
+            audio_frames = speech_frames = 0U;
+            max_volume_dbfs = -120.0f;
+            last_candidate_id = 0;
+            last_candidate_probability = 0.0f;
+            last_candidate_log_us = 0;
             deadline_us = esp_timer_get_time() + (int64_t)VOICE_COMMAND_TIMEOUT_MS * 1000;
-            ESP_LOGI(TAG, "Wake word detected: 你好小智; say a command within 6 seconds");
+            ESP_LOGI(TAG, "Wake word detected: 你好小鑫; say a command within 6 seconds");
             continue; /* 不将唤醒词所在帧作为命令输入。 */
         }
         if (!listening) { continue; }
@@ -4837,21 +4982,48 @@ static void speech_detect_task(void *argument)
         }
 
         /* 每帧完整输入，避免仅喂 VAD 帧破坏 MultiNet 的时间连续性。 */
+        ++audio_frames;
+        const bool speech = result->vad_state == VAD_SPEECH;
+        if (speech) { ++speech_frames; }
+        if (result->data_volume > max_volume_dbfs) { max_volume_dbfs = result->data_volume; }
         const esp_mn_state_t state = s_speech.mn->detect(s_speech.mn_data, result->data);
         if (state == ESP_MN_STATE_DETECTED) {
             esp_mn_results_t *recognized = s_speech.mn->get_results(s_speech.mn_data);
-            if (recognized && recognized->num > 0 && recognized->prob[0] >= VOICE_MIN_PROBABILITY) {
+            if (recognized && recognized->num > 0) {
                 const int command_id = recognized->command_id[0];
-                /* 仅接受注册的 10 个用户命令，内部 LISTEN/TOGGLE 事件不能由模型直接生成。 */
-                if (command_id >= PLAYER_NEXT && command_id <= PLAYER_SONG_TWO) {
+                const float probability = recognized->prob[0];
+                const bool accepted = speech_command_accepted(command_id, probability);
+                const int64_t now_us = esp_timer_get_time();
+                if (command_id != last_candidate_id || now_us - last_candidate_log_us >= 500000LL) {
+                    ESP_LOGI(TAG, "Voice candidate: id=%d confidence=%.2f accepted=%d text=%.80s raw=%.80s",
+                             command_id, probability, accepted, recognized->string, recognized->raw_string);
+                    last_candidate_log_us = now_us;
+                }
+                last_candidate_id = command_id;
+                last_candidate_probability = probability;
+                if (accepted && command_id == PLAYER_RESUME) {
+                    speech_note_play_candidate(&play_candidate, probability);
+                } else if (accepted && player_post_command((player_command_t)command_id)) {
                     ESP_LOGI(TAG, "Voice command id=%d confidence=%.2f",
-                             command_id, recognized->prob[0]);
-                    (void)player_post_command((player_command_t)command_id);
+                             command_id, probability);
                     listening = false;
                     speech_finish_listening();
+                    continue;
                 }
             }
-        } else if (state == ESP_MN_STATE_TIMEOUT) {
+        }
+        if (speech_play_candidate_ready(&play_candidate, speech, (uint32_t)expected_samples) &&
+            player_post_command(PLAYER_RESUME)) {
+            ESP_LOGI(TAG, "Voice command id=%d confidence=%.2f (PLAY after speech end)",
+                     PLAYER_RESUME, play_candidate.probability);
+            listening = false;
+            speech_finish_listening();
+            continue;
+        }
+        if (state == ESP_MN_STATE_TIMEOUT) {
+            ESP_LOGW(TAG, "MultiNet timeout: frames=%u speech=%u peak=%.1f dBFS last_id=%d confidence=%.2f",
+                     audio_frames, speech_frames, max_volume_dbfs,
+                     last_candidate_id, last_candidate_probability);
             listening = false;
             speech_finish_listening();
         }
@@ -4861,8 +5033,8 @@ static void speech_detect_task(void *argument)
 /**
  * 初始化本地离线识别所需的麦克风、模型、AFE/MultiNet、词表和两个应用任务。
  * CONFIG_PLAYER_MIC_CONNECTED 未启用时返回 ESP_OK，但不会创建模型/任务；ready 仍为 false。
- * 从名为 model 的 Flash 分区筛选中文 mn5 与 nihaoxiaozhi 的 wn9 模型。
- * 单麦配置 M：关闭 AEC/分离，启用 WebRTC 降噪、VAD 和唤醒，较多内存放 PSRAM。
+ * 从名为 model 的 Flash 分区筛选中文 mn5 与 nihaoxiaoxin 的 wn9 模型。
+ * 单麦配置 M：关闭 AEC/分离/降噪，启用 VAD 和唤醒，较多内存放 PSRAM。
  * 模型采样率/AFE 输入通道数/AFE 与 MultiNet 帧长必须匹配，否则失败回滚。
  * 注册 SPEECH_COMMANDS 后统一 update 并检查拒绝词；再设概率阈值及采集缓冲。
  * 两个任务先等 START 门，全部初始化成功才同时打开 START/RUN，避免读未就绪资源。
@@ -4881,7 +5053,7 @@ static esp_err_t speech_init(void)
     s_speech.models = esp_srmodel_init("model");
     if (!s_speech.models) { error = ESP_ERR_NOT_FOUND; goto failed; }
     char *mn_name = esp_srmodel_filter(s_speech.models, "mn5", ESP_MN_CHINESE);
-    char *wake_name = esp_srmodel_filter(s_speech.models, "wn9", "nihaoxiaozhi");
+    char *wake_name = esp_srmodel_filter(s_speech.models, "wn9", "nihaoxiaoxin");
     if (!mn_name || !wake_name) {
         ESP_LOGE(TAG, "Required WakeNet9/MultiNet5 Chinese models missing; run full idf.py flash");
         error = ESP_ERR_NOT_FOUND;
@@ -4890,12 +5062,13 @@ static esp_err_t speech_init(void)
 
     afe_config_t *config = afe_config_init("M", s_speech.models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
     if (!config) { error = ESP_ERR_NO_MEM; goto failed; }
-    /* 单麦克风、无播放参考信号：关闭 AEC/BSS，启用 WebRTC 降噪及 VAD。
+    /* 单麦克风、无播放参考信号：关闭 AEC/BSS，启用 VAD。
      * 唤醒时尚无回声消除，高音量播放可能降低唤醒率，实机需要调试摆位。
+     * ESP-SR 在 SR 模式明确警告 NS 可能降低识别率；短命令优先保留原始语音特征。
      */
     config->aec_init = false;
     config->se_init = false;
-    config->ns_init = true;
+    config->ns_init = false;
     config->vad_init = true;
     config->vad_delay_ms = 0; /* 每帧送入 MN，关闭 VAD 缓存截帧模式。 */
     config->wakenet_init = true;
@@ -4935,7 +5108,10 @@ static esp_err_t speech_init(void)
         error = ESP_ERR_INVALID_ARG;
         goto failed;
     }
-    s_speech.mn->set_det_threshold(s_speech.mn_data, VOICE_MIN_PROBABILITY);
+    /* 若模型仍设为 0.65，应用层永远收不到 0.55~0.65 的播放候选。 */
+    const float detect_threshold = VOICE_PLAY_MIN_PROBABILITY < VOICE_MIN_PROBABILITY
+        ? VOICE_PLAY_MIN_PROBABILITY : VOICE_MIN_PROBABILITY;
+    s_speech.mn->set_det_threshold(s_speech.mn_data, detect_threshold);
     s_speech.feed_samples = s_speech.afe->get_feed_chunksize(s_speech.afe_data);
     if (s_speech.feed_samples <= 0) { error = ESP_ERR_INVALID_SIZE; goto failed; }
     s_speech.raw_stereo = heap_caps_malloc(
@@ -4959,6 +5135,9 @@ static esp_err_t speech_init(void)
     s_speech.afe->print_pipeline(s_speech.afe_data);
     ESP_LOGI(TAG, "ESP-SR ready: %s + %s, INMP441 SCK=%d WS=%d SD=%d",
              wake_name, mn_name, MIC_BCLK_GPIO, MIC_WS_GPIO, MIC_DATA_GPIO);
+    ESP_LOGI(TAG, "Voice thresholds: PLAY=%.2f others=%.2f, speech-end wait=%u ms, NS=OFF",
+             (double)VOICE_PLAY_MIN_PROBABILITY, (double)VOICE_MIN_PROBABILITY,
+             (unsigned)VOICE_PLAY_SETTLE_MS);
     /* 所有资源和两项任务准备好后再开门，失败清理路径从不让任务使用半初始化状态。 */
     xEventGroupSetBits(s_speech.start_event,
                        SPEECH_TASK_START_BIT | SPEECH_TASK_RUN_BIT);
@@ -5040,8 +5219,37 @@ static esp_err_t speech_set_active(bool active)
     }
     s_voice_active = true;
     xEventGroupSetBits(s_speech.start_event, SPEECH_TASK_RUN_BIT);
-    ESP_LOGI(TAG, "ESP-SR resumed for MUSIC; wake word: 你好小智");
+    ESP_LOGI(TAG, "ESP-SR resumed for MUSIC; wake word: 你好小鑫");
     return ESP_OK;
+}
+
+/* 按需加载仍在 CPU0 初始化麦克风 RX，保持原有中断/采集亲和性。
+ * 播放器等待期间继续送零样本并轮询 BOOT；退出开始页不会丢失按键动作。
+ */
+typedef struct {
+    TaskHandle_t caller;
+    esp_err_t result;
+} speech_init_context_t;
+
+static void speech_init_worker(void *argument)
+{
+    speech_init_context_t *context = argument;
+    context->result = speech_init();
+    xTaskNotifyGive(context->caller);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t speech_init_on_demand(void)
+{
+    speech_init_context_t context = {.caller = xTaskGetCurrentTaskHandle(), .result = ESP_FAIL};
+    if (xTaskCreatePinnedToCore(speech_init_worker, "sr_init", 8192, &context, 3, NULL, 0) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+    while (ulTaskNotifyTake(pdTRUE, 0) == 0U) {
+        memset(s_audio_buffer, 0, sizeof(s_audio_buffer));
+        if (audio_write_buffer(AUDIO_BUFFER_FRAMES) != ESP_OK) { vTaskDelay(pdMS_TO_TICKS(20)); }
+    }
+    return context.result;
 }
 
 /* 常驻 TX：切换时保持当前采样率，只覆盖并排空旧音频。
@@ -5145,6 +5353,8 @@ static esp_err_t play_piano(void)
  * 语音、屏幕或 RGB 不可用时可保留播放；TX 初始化/模式排空错误则终止播放器任务。
  * @param argument 未使用，app_main 创建后该任务持续运行。
  */
+#include "wifi_transfer.inc"
+
 static void player_task(void *argument)
 {
     (void)argument;
@@ -5160,9 +5370,26 @@ static void player_task(void *argument)
         return;
     }
     s_player_started = true;
-    player_mode_t audio_mode = PLAYER_MODE_MUSIC;
+    player_mode_t audio_mode = PLAYER_MODE_HOME;
+    bool speech_attempted = false;
+    bool transfer_attempted = false;
+    int64_t transfer_ui_us = 0;
     while (true) {
         if (audio_mode != s_mode) {
+            /* 文件传输任务彻底退出、关闭 FILE 后，才允许播放/恢复/更新目录。 */
+            if (audio_mode == PLAYER_MODE_TRANSFER) {
+                wifi_transfer_stop();
+                transfer_attempted = false;
+            }
+            if (s_mode == PLAYER_MODE_MUSIC && !speech_attempted) {
+                speech_attempted = true;
+                const esp_err_t init_error = speech_init_on_demand();
+                s_voice_ready = init_error == ESP_OK && s_speech.mn_data != NULL;
+                s_voice_active = s_voice_ready;
+                if (init_error != ESP_OK) {
+                    ESP_LOGW(TAG, "ESP-SR init: %s", esp_err_to_name(init_error));
+                }
+            }
             const esp_err_t speech_error = speech_set_active(s_mode == PLAYER_MODE_MUSIC);
             if (speech_error != ESP_OK) {
                 ESP_LOGW(TAG, "ESP-SR mode change: %s", esp_err_to_name(speech_error));
@@ -5175,7 +5402,7 @@ static void player_task(void *argument)
             }
             audio_mode = s_mode;
             /* 琴音模式中暂不读卡；返回时主动 CMD13 检查，失效挂载先恢复再 fopen。 */
-            if (s_mode == PLAYER_MODE_MUSIC) {
+            if (s_mode == PLAYER_MODE_MUSIC || s_mode == PLAYER_MODE_TRANSFER) {
                 const esp_err_t card_status = s_sd_mounted && s_sd_card != NULL
                     ? sdmmc_get_status(s_sd_card) : ESP_ERR_INVALID_STATE;
                 ESP_LOGI(TAG, "SD status after PIANO: %s", esp_err_to_name(card_status));
@@ -5183,7 +5410,12 @@ static void player_task(void *argument)
             }
         }
         s_switch_requested = false;
-        if (!s_sd_loading) { display_request_update(); }
+        if (audio_mode == s_mode && s_mode != PLAYER_MODE_TRANSFER) { display_request_update(); }
+        if (s_mode == PLAYER_MODE_HOME || s_mode == PLAYER_MODE_SETTINGS) {
+            rgb_set_output(RGB_OUTPUT_OFF);
+            (void)audio_silence(20U);
+            continue;
+        }
         if (s_mode == PLAYER_MODE_PIANO) {
             const esp_err_t piano_error = play_piano();
             if (piano_error != ESP_OK) {
@@ -5206,6 +5438,21 @@ static void player_task(void *argument)
                     (int64_t)SD_RECOVERY_RETRY_DELAY_MS * 1000LL;
             }
             continue; /* 恢复期间可能切换了模式，先重新检查模式再播放。 */
+        }
+        if (s_mode == PLAYER_MODE_TRANSFER) {
+            if (!transfer_attempted) {
+                transfer_attempted = true;
+                const esp_err_t wifi_error = wifi_transfer_start();
+                if (wifi_error != ESP_OK) {
+                    ESP_LOGW(TAG, "Wi-Fi transfer: %s", esp_err_to_name(wifi_error));
+                }
+            }
+            if (esp_timer_get_time() - transfer_ui_us >= 200000LL) {
+                transfer_ui_us = esp_timer_get_time();
+                display_request_update();
+            }
+            (void)audio_silence(20U);
+            continue;
         }
         esp_err_t error;
         if (s_sd_wav_count > 0U) {
@@ -5243,8 +5490,8 @@ static void player_task(void *argument)
 /**
  * ESP-IDF 应用入口：只负责一次性初始化与创建常驻任务。
  * 先检查 RTC 看门狗记录，再建立命令/快照队列和按键输入。
- * 屏幕成功时显示一次校标和加载页；SD 使用独立大栈任务同步完成首次扫描。
- * 打印接线/音量参数，然后初始化离线语音，最后创建显示、播放器与 RGB 任务。
+ * 屏幕成功时显示一次校标和四宫格开始页；进入功能后才按需初始化 SD/语音。
+ * 打印接线/音量参数，创建显示、播放器与 RGB 任务；首次进入音乐才初始化语音。
  * 可选模块失败按日志提示降级；按键初始化用 ESP_ERROR_CHECK，队列失败则返回。
  * 显示任务创建失败可直接绘制一份 fallback 画面，之后不再有运行期页面更新。
  * 创建任务后删除 app_main 自身，释放其栈；业务由各个任务及消息通路继续处理。
@@ -5287,17 +5534,9 @@ void app_main(void)
                 ESP_LOGW(TAG, "NJUPT logo failed: %s", esp_err_to_name(logo_error));
             }
         }
-        const esp_err_t loading_error = tft_show_loading(0U, SD_MOUNT_RETRY_COUNT);
-        if (loading_error != ESP_OK) {
-            ESP_LOGW(TAG, "Loading screen failed: %s", esp_err_to_name(loading_error));
-        }
+        const display_update_t home = {.mode = PLAYER_MODE_HOME};
+        tft_draw_status(&home);
         gpio_set_level(TFT_BL_GPIO, 1);
-    }
-
-    const esp_err_t sd_error = sd_card_init_and_scan();
-    if (sd_error != ESP_OK) {
-        ESP_LOGW(TAG, "microSD unavailable: %s; player will continue",
-                 esp_err_to_name(sd_error));
     }
 
     ESP_LOGI(TAG, "MAX98357: BCLK=%d LRC=%d DIN=%d",
@@ -5305,19 +5544,10 @@ void app_main(void)
     ESP_LOGI(TAG, "ST7789: SCL=%d SDA=%d RES=%d DC=%d BLK=%d",
              TFT_SCLK_GPIO, TFT_MOSI_GPIO, TFT_RST_GPIO, TFT_DC_GPIO, TFT_BL_GPIO);
     ESP_LOGI(TAG, "WS2812 RGB: DIN=%d, music breath / piano note colors", RGB_LED_GPIO);
-    ESP_LOGI(TAG, "Initial volume: MUSIC=%u%% PIANO=%u%%; short BOOT switches mode, hold BOOT opens settings",
+    ESP_LOGI(TAG, "Initial volume: MUSIC=%u%% PIANO=%u%%; BOOT short=select, hold=enter/back",
              (unsigned)PLAYER_VOLUME_PERCENT, (unsigned)PIANO_VOLUME_PERCENT);
     ESP_LOGI(TAG, "Audio output gain: %ux, int16 saturation; piano divisor=%u",
              (unsigned)AUDIO_OUTPUT_GAIN, (unsigned)PIANO_VOLUME_DIVISOR);
-
-    /* 初始化失败可降级为按键播放器；语音禁用虽返回 OK，mn_data 仍为空，不算 ready。 */
-    const esp_err_t speech_error = speech_init();
-    s_voice_ready = speech_error == ESP_OK && s_speech.mn_data != NULL;
-    s_voice_active = s_voice_ready;
-    if (speech_error != ESP_OK) {
-        ESP_LOGE(TAG, "ESP-SR init failed: %s; button playback remains available",
-                 esp_err_to_name(speech_error));
-    }
 
     /* 此后不再由初始化/SD 恢复流程直接写 TFT，运行期统一交给显示任务。 */
     if (s_tft_ready &&
@@ -5325,10 +5555,7 @@ void app_main(void)
                                 NULL, DISPLAY_TASK_PRIORITY, NULL,
                                 DISPLAY_TASK_CORE) != pdPASS) {
         ESP_LOGW(TAG, "Cannot create TFT task; audio will continue without updates");
-        const display_update_t fallback = {
-            .song_index = s_song_index, .volume_percent = s_volume_percent,
-            .player_started = true, .voice_ready = s_voice_ready,
-        };
+        const display_update_t fallback = {.mode = PLAYER_MODE_HOME};
         tft_draw_status(&fallback);
     }
     if (xTaskCreatePinnedToCore(player_task, "music_player", PLAYER_TASK_STACK_SIZE,
@@ -5341,6 +5568,11 @@ void app_main(void)
                                 NULL, RGB_TASK_PRIORITY, NULL,
                                 RGB_TASK_CORE) != pdPASS) {
         ESP_LOGW(TAG, "Cannot create RGB breath task; playback will continue");
+    }
+    if (xTaskCreatePinnedToCore(ultrasonic_task, "ultrasonic", ULTRASONIC_TASK_STACK_SIZE,
+                               NULL, ULTRASONIC_TASK_PRIORITY, NULL,
+                               ULTRASONIC_TASK_CORE) != pdPASS) {
+        ESP_LOGW(TAG, "Cannot create ultrasonic task; playback will continue");
     }
     ESP_LOGI(TAG, "Tasks: player CPU%d/P%d, SR feed CPU%d/P%d, "
                   "SR detect CPU%d/P%d, TFT CPU%d/P%d, RGB CPU%d/P%d",

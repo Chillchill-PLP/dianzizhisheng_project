@@ -11,7 +11,7 @@ menu "Player speech recognition"
         default y
         help
             Uses ESP-SR WakeNet9 + Chinese MultiNet5 Q8.
-            Wake word: ni hao xiao zhi.
+            Wake word: ni hao xiao xin.
     config PLAYER_MIC_BCLK_GPIO
         int "INMP441 SCK GPIO"
         range 0 48
@@ -29,4 +29,24 @@ menu "Player speech recognition"
         default n
         help
             Default is the left slot with INMP441 L/R tied to GND.
+endmenu
+
+
+menu "Player Wi-Fi WAV transfer"
+    config PLAYER_WIFI_AP_SSID
+        string "Device hotspot SSID (1-32 UTF-8 bytes)"
+        default "DianZiZhiSheng"
+    config PLAYER_WIFI_AP_PASSWORD
+        string "Device hotspot password (8-63 ASCII characters)"
+        default "dzzs2026"
+    config PLAYER_WIFI_STA_SSID
+        string "Optional 2.4 GHz router SSID (empty = hotspot only)"
+        default ""
+    config PLAYER_WIFI_STA_PASSWORD
+        string "Optional router password"
+        default ""
+    config PLAYER_WIFI_MAX_UPLOAD_MB
+        int "Maximum WAV upload size (MiB)"
+        range 1 512
+        default 256
 endmenu

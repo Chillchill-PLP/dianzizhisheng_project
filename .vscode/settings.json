@@ -1,5 +1,5 @@
 {
-  "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.intelliSenseEngine": "disabled",
   "idf.extensionActivationMode": "always",
   "cmake.cmakePath": "D:\\Espressif\\tools\\cmake\\3.30.2\\bin\\cmake.exe",
   "cmake.generator": "Ninja",
@@ -30,27 +30,60 @@
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3",
     "IDF_PATH": "D:\\esp\\v5.5.5\\esp-idf",
-    "IDF_TOOLS_PATH": "D:\\Espressif",
-    "IDF_PYTHON_ENV_PATH": "D:\\Espressif\\tools\\python\\v5.5.5\\venv",
-    "ESP_ROM_ELF_DIR": "D:\\Espressif\\tools\\esp-rom-elfs\\20241011",
-    "OPENOCD_SCRIPTS": "D:\\Espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20260424\\openocd-esp32\\share\\openocd\\scripts",
-    "IDF_CCACHE_ENABLE": "1"
-  },
-  "terminal.integrated.env.windows": {
-    "IDF_PATH": "D:\\esp\\v5.5.5\\esp-idf",
-    "IDF_TOOLS_PATH": "D:\\Espressif",
+    "IDF_TOOLS_PATH": "D:\\Espressif\\tools",
     "IDF_PYTHON_ENV_PATH": "D:\\Espressif\\tools\\python\\v5.5.5\\venv",
     "ESP_ROM_ELF_DIR": "D:\\Espressif\\tools\\esp-rom-elfs\\20241011",
     "OPENOCD_SCRIPTS": "D:\\Espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20260424\\openocd-esp32\\share\\openocd\\scripts",
     "IDF_CCACHE_ENABLE": "1",
-    "PATH": "D:\\Espressif\\tools\\ccache\\4.12.1\\ccache-4.12.1-windows-x86_64;D:\\Espressif\\tools\\cmake\\3.30.2\\bin;D:\\Espressif\\tools\\ninja\\1.12.1;D:\\Espressif\\tools\\xtensa-esp-elf\\esp-14.2.0_20260121\\xtensa-esp-elf\\bin;D:\\Espressif\\tools\\python\\v5.5.5\\venv\\Scripts;${env:PATH}"
+    "TEMP": "D:\\Embedded\\temp",
+    "TMP": "D:\\Embedded\\temp",
+    "PIP_CACHE_DIR": "D:\\Embedded\\cache\\pip",
+    "CCACHE_DIR": "D:\\Embedded\\cache\\ccache",
+    "XDG_CACHE_HOME": "D:\\Embedded\\cache",
+    "IDF_COMPONENT_CACHE_PATH": "D:\\Embedded\\cache\\idf-components",
+    "PYTHONUTF8": "1"
+  },
+  "terminal.integrated.env.windows": {
+    "IDF_PATH": "D:\\esp\\v5.5.5\\esp-idf",
+    "IDF_TOOLS_PATH": "D:\\Espressif\\tools",
+    "IDF_PYTHON_ENV_PATH": "D:\\Espressif\\tools\\python\\v5.5.5\\venv",
+    "ESP_ROM_ELF_DIR": "D:\\Espressif\\tools\\esp-rom-elfs\\20241011",
+    "OPENOCD_SCRIPTS": "D:\\Espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20260424\\openocd-esp32\\share\\openocd\\scripts",
+    "IDF_CCACHE_ENABLE": "1",
+    "PATH": "D:\\Espressif\\tools\\ccache\\4.12.1\\ccache-4.12.1-windows-x86_64;D:\\Espressif\\tools\\cmake\\3.30.2\\bin;D:\\Espressif\\tools\\ninja\\1.12.1;D:\\Espressif\\tools\\xtensa-esp-elf\\esp-14.2.0_20260121\\xtensa-esp-elf\\bin;D:\\Espressif\\tools\\python\\v5.5.5\\venv\\Scripts;${env:PATH}",
+    "TEMP": "D:\\Embedded\\temp",
+    "TMP": "D:\\Embedded\\temp",
+    "PIP_CACHE_DIR": "D:\\Embedded\\cache\\pip",
+    "CCACHE_DIR": "D:\\Embedded\\cache\\ccache",
+    "XDG_CACHE_HOME": "D:\\Embedded\\cache",
+    "IDF_COMPONENT_CACHE_PATH": "D:\\Embedded\\cache\\idf-components",
+    "PYTHONUTF8": "1"
   },
   "clangd.path": "D:\\Espressif\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
   "clangd.arguments": [
     "--background-index",
-    "--query-driver=**",
-    "--compile-commands-dir=C:/Users/Administrator/Desktop/dianzizhisheng_project/build"
+    "--query-driver=D:/Espressif/tools/xtensa-esp-elf/**/bin/*-gcc.exe",
+    "--compile-commands-dir=${workspaceFolder}/build"
   ],
   "idf.flashType": "UART",
-  "chat.agent.enabled": false
+  "chat.agent.enabled": false,
+  "idf.buildPath": "${workspaceFolder}/build",
+  "idf.enableCCache": true,
+  "terminal.integrated.profiles.windows": {
+    "Embedded ESP32 (PowerShell 7)": {
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe",
+      "args": [
+        "-NoLogo",
+        "-NoExit",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "D:/Embedded/scripts/Activate-Embedded.ps1",
+        "-Platform",
+        "ESP32"
+      ]
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "Embedded ESP32 (PowerShell 7)",
+  "clangd.checkUpdates": false
 }

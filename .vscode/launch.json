@@ -2,9 +2,34 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "ESP32-S3: USB JTAG Attach (native USB required)",
       "type": "gdbtarget",
       "request": "attach",
-      "name": "Eclipse CDT GDB Adapter"
+      "program": "${workspaceFolder}/build/dianzizhisheng_project.elf",
+      "cwd": "${workspaceFolder}",
+      "gdb": "D:/Espressif/tools/xtensa-esp-elf-gdb/17.1_20260402/xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb.exe",
+      "runOpenOCD": true,
+      "buildFlashMonitor": false,
+      "verifyAppBinBeforeDebug": true,
+      "initialBreakpoint": "",
+      "logFile": "D:/Embedded/logs/dianzizhisheng_project/gdb.log",
+      "environment": {
+        "IDF_TARGET": "esp32s3",
+        "IDF_PATH": "D:\\esp\\v5.5.5\\esp-idf",
+        "IDF_TOOLS_PATH": "D:\\Espressif\\tools",
+        "IDF_PYTHON_ENV_PATH": "D:\\Espressif\\tools\\python\\v5.5.5\\venv",
+        "ESP_ROM_ELF_DIR": "D:\\Espressif\\tools\\esp-rom-elfs\\20241011",
+        "OPENOCD_SCRIPTS": "D:\\Espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20260424\\openocd-esp32\\share\\openocd\\scripts",
+        "IDF_CCACHE_ENABLE": "1",
+        "TEMP": "D:\\Embedded\\temp",
+        "TMP": "D:\\Embedded\\temp",
+        "PIP_CACHE_DIR": "D:\\Embedded\\cache\\pip",
+        "CCACHE_DIR": "D:\\Embedded\\cache\\ccache",
+        "XDG_CACHE_HOME": "D:\\Embedded\\cache",
+        "IDF_COMPONENT_CACHE_PATH": "D:\\Embedded\\cache\\idf-components",
+        "PYTHONUTF8": "1"
+      },
+      "preLaunchTask": "ESP32-S3: Build"
     }
   ]
 }
