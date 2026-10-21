@@ -6,6 +6,28 @@
 
 ESP32-S3 audio project with offline Chinese voice control, WAV playback, a matrix-keypad piano, an ST7789 display and local Wi-Fi file transfer.
 
+## 实物与界面
+
+### 界面预览
+
+![电子之声界面预览：开始页音乐入口、文件传输入口、Wi-Fi WAV 传输页和音量设置页](assets/photos/ui-wifi-home-preview.png)
+
+上图为界面预览，展示四宫格选择、文件传输与音量设置；图中的百分比、传输进度等为预览示例。
+
+### 原型实拍
+
+<p align="center">
+  <a href="assets/photos/prototype-overview.jpg"><img src="assets/photos/prototype-overview.jpg" width="560" alt="电子之声面包板原型整体实拍，包含开发板、屏幕及外接超声波模块"></a>
+</p>
+
+面包板原型整体搭建与外接超声波模块。以下两张原始实拍分别展示四宫格主菜单和音乐播放界面，点击可查看原图。
+
+| 四宫格主菜单实拍 | 音乐播放界面实拍 |
+| --- | --- |
+| <a href="assets/photos/home-menu.jpg"><img src="assets/photos/home-menu.jpg" width="300" alt="ST7789 屏幕上的电子之声四宫格主菜单实拍"></a> | <a href="assets/photos/music-player.jpg"><img src="assets/photos/music-player.jpg" width="300" alt="ST7789 屏幕上的音乐播放界面实拍，显示歌曲、作者和播放进度"></a> |
+
+照片展示拍摄时的硬件与界面状态；最新固件的功能验收范围仍以[验证记录](#验证记录)和[待完成与实机验收](#待完成与实机验收)为准。
+
 ## 项目亮点
 
 | 功能 | 可以做什么 |
